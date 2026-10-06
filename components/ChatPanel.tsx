@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Mic, Send, Sparkle } from "@/components/icons";
+import { DresslyGlass } from "@/components/shaders/DresslyGlass";
 import type { Suggestion } from "@/lib/api-types";
 import type { ChatMessage } from "@/lib/types";
 
@@ -73,8 +74,8 @@ export function ChatPanel({ messages, suggestions, busy, onSend }: ChatPanelProp
   };
 
   return (
-    <section className="flex min-h-0 flex-col rounded-[3px] border border-line bg-card">
-      <header className="flex items-center justify-between border-b border-line px-5 py-3">
+    <DresslyGlass shaderSheen className="flex min-h-0 flex-col">
+      <header className="relative z-10 flex items-center justify-between border-b border-chrome/10 px-5 py-3">
         <p className="overline text-muted">Stylist</p>
         <span className="flex items-center gap-1.5 text-[11px] text-muted">
           <Sparkle width={13} height={13} /> agentic
@@ -96,7 +97,7 @@ export function ChatPanel({ messages, suggestions, busy, onSend }: ChatPanelProp
                 className={`max-w-[85%] rounded-[3px] px-3.5 py-2.5 text-[14px] leading-snug ${
                   message.role === "user"
                     ? "bg-ink text-paper"
-                    : "border border-line bg-paper/60 text-ink"
+                    : "border border-chrome/12 bg-white/[0.04] text-text-primary"
                 }`}
               >
                 {message.text}
@@ -112,7 +113,7 @@ export function ChatPanel({ messages, suggestions, busy, onSend }: ChatPanelProp
         ) : null}
       </div>
 
-      <div className="border-t border-line px-4 pb-4 pt-3">
+      <div className="border-t border-chrome/10 px-4 pb-4 pt-3">
         <div className="mb-3 flex flex-wrap gap-2">
           {suggestions.map((suggestion) => (
             <button
@@ -150,15 +151,17 @@ export function ChatPanel({ messages, suggestions, busy, onSend }: ChatPanelProp
             rows={1}
             disabled={busy}
             placeholder={busy ? "Working on your look…" : "Tell Dressly what you think…"}
-            className="max-h-32 min-h-[46px] flex-1 resize-none rounded-[2px] border border-line bg-paper/50 px-3.5 py-3 text-[14px] outline-none transition focus:border-accent disabled:opacity-60"
+            className="max-h-32 min-h-[46px] flex-1 resize-none rounded-[3px] border border-chrome/15 bg-black/25 px-3.5 py-3 text-[14px] text-text-primary outline-none transition placeholder:text-muted focus:border-accent/70 disabled:opacity-60"
           />
           <button
             type="button"
             onClick={toggleVoice}
             disabled={busy}
             aria-label={listening ? "Stop voice input" : "Start voice input"}
-            className={`flex h-[46px] w-[46px] items-center justify-center rounded-[2px] border transition disabled:opacity-50 ${
-              listening ? "border-accent bg-accent/10 text-accent" : "border-line text-ink-soft hover:border-accent"
+            className={`flex h-[46px] w-[46px] items-center justify-center rounded-[3px] border transition disabled:opacity-50 ${
+              listening
+                ? "border-accent bg-accent/10 text-accent-soft"
+                : "border-chrome/15 text-ink-soft hover:border-accent/70"
             }`}
           >
             <Mic width={17} height={17} />
@@ -167,12 +170,12 @@ export function ChatPanel({ messages, suggestions, busy, onSend }: ChatPanelProp
             type="submit"
             disabled={busy || text.trim().length === 0}
             aria-label="Send message"
-            className="flex h-[46px] w-[46px] items-center justify-center rounded-[2px] bg-ink text-paper transition hover:bg-accent disabled:bg-line-strong"
+            className="sheen flex h-[46px] w-[46px] items-center justify-center rounded-[3px] border border-chrome/20 bg-ink text-paper transition hover:bg-accent hover:text-night disabled:border-chrome/10 disabled:bg-white/[0.04] disabled:text-muted"
           >
             <Send width={17} height={17} />
           </button>
         </form>
       </div>
-    </section>
+    </DresslyGlass>
   );
 }

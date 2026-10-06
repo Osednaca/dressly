@@ -9,6 +9,7 @@ import { LookHistory } from "@/components/LookHistory";
 import { Masthead } from "@/components/Masthead";
 import { Onboarding } from "@/components/Onboarding";
 import { ProviderBanner } from "@/components/ProviderBanner";
+import { DresslyAmbient } from "@/components/shaders/DresslyAmbient";
 import { Sparkle } from "@/components/icons";
 import { api } from "@/lib/client/api";
 import type { BlockedView, ChatResponse, JobView, SessionPayload, Suggestion } from "@/lib/api-types";
@@ -219,6 +220,7 @@ export function DresslyApp() {
 
   return (
     <div className="flex min-h-screen flex-col">
+      <DresslyAmbient variant={!session ? "hero" : showFinal ? "cinematic" : "global"} />
       <Masthead />
       <ProviderBanner />
 
@@ -264,7 +266,7 @@ export function DresslyApp() {
                 type="button"
                 disabled={working || session.looks.length === 0}
                 onClick={() => withSession(api.finish)}
-                className="flex flex-1 items-center justify-center gap-2 rounded-[2px] border border-line bg-card px-4 py-3 text-[12px] uppercase tracking-[0.16em] text-ink-soft transition hover:border-accent hover:text-accent disabled:opacity-50"
+                className="sheen flex flex-1 items-center justify-center gap-2 rounded-[3px] border border-chrome/15 bg-white/[0.03] px-4 py-3 text-[12px] uppercase tracking-[0.16em] text-ink-soft transition hover:border-accent/70 hover:text-accent-soft disabled:opacity-50"
               >
                 <Sparkle width={15} height={15} /> Finish the look
               </button>
@@ -272,7 +274,7 @@ export function DresslyApp() {
                 <button
                   type="button"
                   onClick={() => setFinalDismissed(false)}
-                  className="rounded-[2px] bg-ink px-4 py-3 text-[12px] uppercase tracking-[0.16em] text-paper transition hover:bg-accent"
+                  className="sheen rounded-[3px] border border-chrome/20 bg-ink px-4 py-3 text-[12px] uppercase tracking-[0.16em] text-paper transition hover:bg-accent hover:text-night"
                 >
                   View look
                 </button>

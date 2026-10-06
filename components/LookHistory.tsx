@@ -27,7 +27,7 @@ export function LookHistory({
   if (looks.length === 0) return null;
 
   return (
-    <section className="rounded-[3px] border border-line bg-card p-4">
+    <section className="glass rounded-[4px] p-4">
       <p className="overline mb-3 text-muted">Look history</p>
       <div className="thin-scroll flex gap-3 overflow-x-auto pb-1">
         {looks.map((look) => {

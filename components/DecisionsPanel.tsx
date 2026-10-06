@@ -11,9 +11,9 @@ function Bars({ items, max = 4 }: { items: ScoredAlternative[]; max?: number }) 
     <ul className="space-y-1.5">
       {items.slice(0, max).map((item) => (
         <li key={item.label} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-          <span className="relative block h-[3px] w-full overflow-hidden rounded-full bg-line">
+          <span className="relative block h-[3px] w-full overflow-hidden rounded-full bg-white/10">
             <span
-              className="absolute inset-y-0 left-0 rounded-full bg-accent"
+              className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-champagne to-accent-soft"
               style={{ width: `${Math.max(2, Math.round(item.probability * 100))}%` }}
             />
           </span>
@@ -29,7 +29,7 @@ function Bars({ items, max = 4 }: { items: ScoredAlternative[]; max?: number }) 
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="border-t border-line py-3 first:border-t-0 first:pt-0">
+    <div className="border-t border-chrome/10 py-3 first:border-t-0 first:pt-0">
       <p className="overline mb-2 text-muted">{label}</p>
       {children}
     </div>
@@ -48,7 +48,7 @@ export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
   const latest = decisions.at(-1);
 
   return (
-    <section className="rounded-[3px] border border-line bg-card">
+    <section className="glass rounded-[4px]">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -77,7 +77,7 @@ export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
       </button>
 
       {open ? (
-        <div className="border-t border-line px-5 py-4">
+        <div className="border-t border-chrome/10 px-5 py-4">
           {!latest ? (
             <p className="text-[13px] text-muted">
               No decisions yet. Send the first message to see the agent evaluate alternatives.
@@ -134,7 +134,7 @@ export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
           )}
 
           {decisions.length > 1 ? (
-            <details className="mt-4 border-t border-line pt-3">
+            <details className="mt-4 border-t border-chrome/10 pt-3">
               <summary className="overline cursor-pointer text-muted">
                 Earlier iterations ({decisions.length - 1})
               </summary>

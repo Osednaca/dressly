@@ -34,7 +34,7 @@ export function ProviderBanner() {
   const total = data.statuses.length;
 
   return (
-    <div className="relative z-10 border-b border-line bg-paper-deep/60">
+    <div className="relative z-10 border-b border-chrome/10 bg-background/40 backdrop-blur-md">
       <div className="mx-auto flex max-w-[1500px] flex-wrap items-center gap-x-5 gap-y-1 px-6 py-2 md:px-10">
         <span className="overline text-muted">
           {data.mock ? "Simulation" : `${live}/${total} providers live`}

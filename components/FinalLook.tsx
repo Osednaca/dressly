@@ -37,12 +37,12 @@ export function FinalLook({
   const { metrics } = session;
 
   return (
-    <div className="animate-fade fixed inset-0 z-40 overflow-y-auto bg-paper/95 backdrop-blur-sm">
+    <div className="animate-fade fixed inset-0 z-40 overflow-y-auto bg-background/85 backdrop-blur-xl">
       <button
         type="button"
         onClick={onClose}
         aria-label="Back to the fitting room"
-        className="fixed right-5 top-5 z-50 flex h-10 w-10 items-center justify-center rounded-full border border-line bg-card text-ink-soft transition hover:border-accent hover:text-accent"
+        className="fixed right-5 top-5 z-50 flex h-10 w-10 items-center justify-center rounded-full glass text-ink-soft transition hover:border-accent/70 hover:text-accent-soft"
       >
         <X width={17} height={17} />
       </button>
@@ -53,7 +53,7 @@ export function FinalLook({
             {session.occasion ? `Ready for ${session.occasion}.` : "Your finished outfit."}
           </h1>
 
-          <div className="relative mt-6 aspect-[3/4] overflow-hidden rounded-[3px] border border-line bg-night">
+          <div className="relative mt-7 aspect-[3/4] overflow-hidden rounded-[4px] border border-chrome/15 bg-night shadow-[0_60px_140px_-60px_rgba(0,0,0,0.95)]">
             {activeLook?.videoPath ? (
               <video
                 src={activeLook.videoPath}
@@ -90,7 +90,7 @@ export function FinalLook({
                 type="button"
                 onClick={onAnimate}
                 disabled={animationJob?.status === "pending"}
-                className="inline-flex items-center gap-2 rounded-[2px] border border-line px-4 py-2.5 text-[12px] uppercase tracking-[0.16em] text-ink-soft transition hover:border-accent hover:text-accent disabled:opacity-50"
+                className="sheen inline-flex items-center gap-2 rounded-[3px] border border-chrome/20 px-4 py-2.5 text-[12px] uppercase tracking-[0.16em] text-ink-soft transition hover:border-accent/70 hover:text-accent-soft disabled:opacity-50"
               >
                 <Play width={15} height={15} /> Bring this look to life
               </button>
@@ -98,7 +98,7 @@ export function FinalLook({
             <button
               type="button"
               onClick={onNewLook}
-              className="inline-flex items-center gap-2 rounded-[2px] border border-line px-4 py-2.5 text-[12px] uppercase tracking-[0.16em] text-ink-soft transition hover:border-accent hover:text-accent"
+              className="inline-flex items-center gap-2 rounded-[3px] border border-chrome/15 px-4 py-2.5 text-[12px] uppercase tracking-[0.16em] text-ink-soft transition hover:border-accent/70 hover:text-accent-soft"
             >
               <Refresh width={15} height={15} /> Start a new look
             </button>
@@ -109,7 +109,7 @@ export function FinalLook({
         </section>
 
         <section className="animate-rise" style={{ animationDelay: "120ms" }}>
-          <div className="rounded-[3px] border border-line bg-card p-6">
+          <div className="glass rounded-[4px] p-6">
             <p className="overline text-muted">The look</p>
             <div className="mt-3">
               {items.length === 0 ? (
@@ -118,7 +118,7 @@ export function FinalLook({
                 items.map((product) => <ProductCard key={product.id} product={product} />)
               )}
             </div>
-            <div className="mt-4 flex items-baseline justify-between border-t border-line pt-4">
+            <div className="mt-4 flex items-baseline justify-between border-t border-chrome/10 pt-4">
               <span className="overline text-muted">Total</span>
               <span style={{ fontFamily: "var(--font-display)" }} className="text-3xl tabular-nums">
                 ${total}
@@ -128,7 +128,7 @@ export function FinalLook({
               type="button"
               onClick={onAddToCart}
               disabled={cartAdded || items.length === 0}
-              className="mt-5 flex w-full items-center justify-center gap-2 rounded-[2px] bg-ink px-6 py-3.5 text-[13px] font-semibold uppercase tracking-[0.18em] text-paper transition hover:bg-accent disabled:bg-sage"
+              className="sheen mt-5 flex w-full items-center justify-center gap-2 rounded-[3px] border border-chrome/20 bg-ink px-6 py-4 text-[13px] font-semibold uppercase tracking-[0.18em] text-paper transition hover:bg-accent hover:text-night disabled:border-chrome/10 disabled:bg-white/[0.04] disabled:text-muted"
             >
               {cartAdded ? (
                 <>
@@ -145,7 +145,7 @@ export function FinalLook({
             </p>
           </div>
 
-          <div className="mt-5 rounded-[3px] border border-line bg-card p-6">
+          <div className="glass mt-5 rounded-[4px] p-6">
             <p className="overline text-muted">How Dressly narrowed it down</p>
             <dl className="mt-4 grid grid-cols-3 gap-4 text-center">
               {[
