@@ -35,7 +35,7 @@ export const env = {
 
   /** Gemini — language and multimodal understanding. */
   geminiApiKey: read("GEMINI_API_KEY"),
-  geminiModel: read("GEMINI_MODEL") ?? "gemini-2.5-flash",
+  geminiModel: read("GEMINI_MODEL") ?? "gemini-3.8-flash",
   geminiTimeoutMs: Number(read("GEMINI_TIMEOUT_MS") ?? 30_000),
 
   /** Runway — optional P2 animation only. */
