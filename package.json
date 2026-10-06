@@ -1,0 +1,29 @@
+{
+  "name": "dressly",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dressly — agentic AI personal stylist and virtual try-on experience powered by YouCam, JEV and Gemini.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "node --no-warnings --experimental-strip-types --import ./scripts/register.mjs --test \"tests/*.test.ts\"",
+    "gen:catalog": "node --no-warnings --experimental-strip-types --import ./scripts/register.mjs scripts/gen-catalog-images.ts"
+  },
+  "dependencies": {
+    "@typesafe-ai/sdk": "0.6.0",
+    "next": "16.3.8",
+    "react": "19.2.0",
+    "react-dom": "19.2.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "sharp": "0.35.5",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3"
+  }
+}

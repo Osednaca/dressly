@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+next-env.d.ts
+
+# Local tooling state
+.atl/
+.agents/
+skills-lock.json
+.npm-cache/
+.npm-install.log
+*.tsbuildinfo
+
+# Secrets — never commit credentials
+.env
+.env.local
+.env.*.local
+
+# Dressly runtime data: uploaded photos, generated try-ons, session mirrors.
+# These are user artifacts and are recreated on demand.
+data/
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
