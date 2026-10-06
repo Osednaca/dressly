@@ -74,6 +74,31 @@ Two ideas carry the project:
 
 Full design rationale: [`docs/PROJECT.md`](docs/PROJECT.md).
 
+## Visual system (Shaders)
+
+The interface is styled as a "midnight atelier": a near-black shell, warm ivory type, clay
+and champagne accents, and translucent glass surfaces. Depth comes from the open-source
+[Shaders](https://shaders.com/) library (WebGPU), used with strict restraint — five signature
+treatments, never a shader on every card:
+
+| Treatment | Component | Where |
+| --- | --- | --- |
+| Ambient environment | `components/shaders/DresslyAmbient.tsx` | Behind the whole app (global / hero / cinematic variants) |
+| Styling state | `components/shaders/DresslyLoadingShader.tsx` | Behind the named loading steps; energy rises with progress |
+| Outfit transition | `components/shaders/LookStage.tsx` | Ripple wipe between the previous and new YouCam result |
+| Glass panel | `components/shaders/DresslyGlass.tsx` | Frosted stylist panel with a fluted-glass edge |
+| Selection glow | `components/shaders/DresslyGlow.tsx` | Halo around the fitting-room frame and primary actions |
+
+Everything is tuned from one place, `lib/visual/config.ts`, so any effect can be switched off
+in a single edit before a recording.
+
+**Graceful degradation.** Shaders is WebGPU-only. The app renders a matching static CSS
+gradient first and only upgrades to the GPU treatment once an adapter is confirmed
+(`isWebGPUSupported` / `getWebGPUSupport`), so initialization is never blocked. Without
+WebGPU, on mobile (`< 768px`), or under `prefers-reduced-motion`, the shaders are skipped and
+the same mood is painted in CSS. The garment imagery is never filtered — shaders only frame,
+transition, and light the scene.
+
 ## Scripts
 
 | Command | Purpose |

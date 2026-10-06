@@ -118,6 +118,7 @@ Deliberately small. This is a hackathon submission, not an enterprise architectu
 | Language | **TypeScript 5.9.3**, `strict` + `noUncheckedIndexedAccess` | The domain contract is the design |
 | UI runtime | **React 19.2.0** | Ships with Next 16 |
 | Styling | **Tailwind CSS 4.3.3** (`@tailwindcss/postcss`) | CSS-first config, no `tailwind.config.js` |
+| Visual effects | **Shaders 4.0.0** (WebGPU, MIT) | Ambient depth, glass, transitions — always with a CSS fallback |
 | Decisions | **JEV / TypeSafe System One** via `@typesafe-ai/sdk@0.6.0` | The mandated decision engine |
 | Language | **Gemini** via REST `generateContent` | No SDK weight; version-tolerant structured output |
 | Try-on | **YouCam / Perfect Corp** `cloth-v4` via REST | The mandated core VTO engine |
@@ -135,7 +136,8 @@ authentication infrastructure, ORMs, state-management libraries.
   "@typesafe-ai/sdk": "0.6.0",
   "next": "16.3.8",
   "react": "19.2.0",
-  "react-dom": "19.2.0"
+  "react-dom": "19.2.0",
+  "shaders": "4.0.0"
 }
 ```
 
@@ -416,7 +418,7 @@ JEV_TIMEOUT_MS=20000
 
 # Gemini — language and multimodal understanding (required for a real demo)
 GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_MODEL=gemini-3.8-flash
 GEMINI_TIMEOUT_MS=30000
 
 # Runway — optional P2 animation only
@@ -453,8 +455,11 @@ components/
   DresslyApp.tsx  Onboarding.tsx  FittingRoom.tsx  BeforeAfter.tsx  LoadingSteps.tsx
   ChatPanel.tsx  DecisionsPanel.tsx  LookHistory.tsx  FinalLook.tsx  ProductCard.tsx
   Masthead.tsx  ProviderBanner.tsx  Logo.tsx  icons.tsx
+  shaders/  DresslyAmbient.tsx  DresslyLoadingShader.tsx  DresslyGlass.tsx
+            DresslyGlow.tsx  LookStage.tsx
 lib/
   types.ts  env.ts  api-types.ts
+  visual/   config.ts  hooks.ts
   agent/    plan.ts  orchestrator.ts  tryon.ts  jobs.ts  runway.ts  suggestions.ts
   catalog/  products.ts  query.ts  occasion.ts
   session/  reducer.ts  store.ts

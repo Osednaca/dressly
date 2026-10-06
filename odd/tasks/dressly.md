@@ -1,7 +1,8 @@
 # Feature: Dressly — agentic AI personal stylist + YouCam virtual try-on
 
 Hackathon: **YouCam API Skin AI & eCommerce Hackathon**
-Status: **IN PROGRESS**
+Status: **P0/P1/P2 COMPLETE + SHADERS VISUAL REDESIGN** — build, typecheck, 32 tests green; live
+Gemini 3.8 / JEV / YouCam verified end to end.
 
 ## Product thesis
 
@@ -87,35 +88,52 @@ Host: `https://yce-api-01.makeupar.com` — `Authorization: Bearer <key>`
 | T17 | README, env example, demo script | DONE | `README.md`, `.env.example`, `docs/DEMO.md` |
 | T18 | Final verification: build, typecheck, lint, demo rehearsal | DONE | `tsc --noEmit` clean, `next build` clean, 32/32 tests, end-to-end smoke in mock mode |
 
+## Visual redesign — Shaders integration
+
+| # | Task | Status | Evidence |
+| --- | --- | --- | --- |
+| V1 | Install and verify the official `shaders` package in Next 16 | DONE | `shaders@4.0.0`; `next build` clean with `shaders/react` |
+| V2 | Central visual config + capability hooks | DONE | `lib/visual/config.ts`, `lib/visual/hooks.ts` |
+| V3 | Dark "midnight atelier" design tokens | DONE | `app/globals.css` — semantic + legacy tokens, glass utilities |
+| V4 | Ambient environment (global / hero / cinematic) | DONE | `components/shaders/DresslyAmbient.tsx` |
+| V5 | Styling-state shader tied to progress | DONE | `components/shaders/DresslyLoadingShader.tsx` |
+| V6 | Outfit transition (ripple wipe between results) | DONE | `components/shaders/LookStage.tsx` |
+| V7 | Glass panel + selection glow | DONE | `components/shaders/DresslyGlass.tsx`, `DresslyGlow.tsx` |
+| V8 | Integrate across onboarding, fitting room, chat, decisions, final look | DONE | `Onboarding.tsx`, `FittingRoom.tsx`, `ChatPanel.tsx`, `DecisionsPanel.tsx`, `FinalLook.tsx`, `Masthead.tsx`, `ProviderBanner.tsx`, `ProductCard.tsx` |
+| V9 | WebGPU fallback + reduced-motion + mobile degradation | DONE | capability gate in `lib/visual/hooks.ts`; CSS gradients in `config.ts`; `prefers-reduced-motion` in `globals.css` |
+| V10 | Fix live Gemini model (`gemini-2.5-flash` retired) | DONE | `lib/env.ts` default → `gemini-3.8-flash`; verified live |
+
 ## Verification evidence
 
 - `npm run typecheck` → no errors.
-- `npm test` → 32 tests, 32 pass, 0 fail.
-- `npm run build` → compiled successfully; 15 routes (1 static page + API routes).
-- End-to-end smoke (mock mode, no credentials): create session → upload photo → "rooftop dinner,
-  elegant but not too formal" → **CHANGE_TOP / Linen Resort Shirt** → mock try-on success → "too
-  formal" → rejection restarts the chain from the original photo → "add a jacket" chains onto the
-  previous result → "finish the look" → **COMPLETED**, cart total computed.
-- Chained try-on verified: Look 2 `previousImagePath` = Look 1 result for an additive turn, and =
-  the original photo after a rejection.
-
+- `npm test` → 32 tests, 32 pass, 0 fail (unchanged — no backend/AI logic touched).
+- `npm run build` → compiled successfully; 15 routes.
+- End-to-end smoke (mock mode): full loop verified (see commit history).
+- **Live provider run (real keys in `.env.local`):** Gemini `gemini-3.8-flash` → live,
+  JEV `jev-1.13.0` → live, YouCam → live. A real try-on produced
+  `data/results/look_*.jpg`. Understanding parsed by Gemini (not fallback) after the model fix.
+- Visual integration verified by build + SSR render of the redesigned dark onboarding
+  (`chrome-text`, `glass-strong`, ambient fallback present; no server errors).
 
 ## Commit log
 
 _See `git log` on `feat/dressly-mvp`. Work is committed as reviewable work units (toolchain +
-imagery, agent core, API, UI, tests, docs). No push, PR, merge or deployment was performed._
+imagery, agent core, API, UI, tests, docs, and the Shaders visual system). No push, PR, merge or
+deployment was performed._
 
 ## Known limitations / open items
 
-- **Credentials are still absent.** Real provider paths are fully implemented and gated; the
-  end-to-end run above was verified in mock mode. Supply `YOUCAM_API_KEY`, `TYPESAFE_API_KEY` and
-  `GEMINI_API_KEY` in `.env.local` to exercise the live path.
+- **Credentials are present in `.env.local`** (gitignored): live Gemini, JEV and YouCam verified.
+  `.env.local` is not committed.
+- The live JEV action for the opening brief is `SHOW_ALTERNATIVE` (a valid "show me an option"
+  decision); it still produces the Linen Resort Shirt look via the effective-action mapping.
 - Engram memory is NOT installed in this environment (`engram` binary missing), so the ODD memory
   mirror cannot be created. The file-based task document is the single source of truth. Mirror
   status: **pending**.
 - Catalog imagery is a deterministic flat-lay render set, not photography. The pipeline is
   isolated in `scripts/gen-catalog-images.ts` and swappable without touching the engine.
-- `@typesafe-ai/sdk@0.6.0` install is complete and typechecks; the live JEV call is unexercised
-  without a key.
+- GPU shader output cannot be visually asserted in this headless environment; correctness relies on
+  the library contract, the build, and the CSS fallback path. A browser pass is recommended before
+  recording.
 - Jobs are memory-only by design (short-lived, single process); a server restart drops an
   in-flight try-on, which surfaces as a retryable failure.
