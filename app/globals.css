@@ -1,0 +1,177 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ *
+ * Dressly design tokens
+ * Editorial fashion atelier: warm paper, warm ink, one clay accent.
+ * ------------------------------------------------------------------ */
+@theme {
+  --color-paper: #f4f1ea;
+  --color-paper-deep: #ebe5d8;
+  --color-card: #faf8f3;
+  --color-ink: #181510;
+  --color-ink-soft: #4c473d;
+  --color-muted: #8c8577;
+  --color-line: #ddd5c7;
+  --color-line-strong: #c8bea9;
+  --color-accent: #9d5a3b;
+  --color-accent-soft: #c98a6a;
+  --color-night: #14120e;
+  --color-night-soft: #221e18;
+  --color-sage: #5c6b57;
+
+  --font-display: "Didot", "Bodoni MT", "Playfair Display", "Georgia", "Times New Roman",
+    serif;
+  --font-sans: "Optima", "Franklin Gothic Medium", "Segoe UI", "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono: "SFMono-Regular", "Cascadia Mono", "Consolas", monospace;
+
+  --radius-card: 2px;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    background-color: var(--color-paper);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  ::selection {
+    background: var(--color-accent);
+    color: #fff;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    letter-spacing: -0.01em;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+}
+
+/* ---------------------------------------------------------------- *
+ * Editorial micro-type
+ * ---------------------------------------------------------------- */
+@utility overline {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- *
+ * Atmosphere: fine paper grain, layered behind everything.
+ * ---------------------------------------------------------------- */
+.grain::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image:
+    radial-gradient(circle at 20% 10%, rgba(157, 90, 59, 0.05), transparent 55%),
+    radial-gradient(circle at 85% 0%, rgba(92, 107, 87, 0.05), transparent 45%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+
+/* ---------------------------------------------------------------- *
+ * Motion
+ * ---------------------------------------------------------------- */
+@keyframes dressly-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes dressly-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes dressly-reveal {
+  from {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+.animate-rise {
+  animation: dressly-rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.animate-fade {
+  animation: dressly-fade 0.6s ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-fade {
+    animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------- *
+ * Scrollbars, restrained.
+ * ---------------------------------------------------------------- */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+.thin-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 99px;
+}
+
+/* Before/after comparison handle */
+.compare-range {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+.compare-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  height: 44px;
+  width: 44px;
+  border-radius: 99px;
+  background: transparent;
+  cursor: ew-resize;
+}
+.compare-range::-moz-range-thumb {
+  height: 44px;
+  width: 44px;
+  border: none;
+  border-radius: 99px;
+  background: transparent;
+  cursor: ew-resize;
+}
