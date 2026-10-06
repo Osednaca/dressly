@@ -1,23 +1,40 @@
 @import "tailwindcss";
 
 /* ------------------------------------------------------------------ *
- * Dressly design tokens
- * Editorial fashion atelier: warm paper, warm ink, one clay accent.
+ * Dressly design tokens — "midnight atelier"
+ * A near-black shell, warm ivory type, clay and champagne accents,
+ * and translucent glass surfaces. Shaders layer depth behind it all.
  * ------------------------------------------------------------------ */
 @theme {
-  --color-paper: #f4f1ea;
-  --color-paper-deep: #ebe5d8;
-  --color-card: #faf8f3;
-  --color-ink: #181510;
-  --color-ink-soft: #4c473d;
-  --color-muted: #8c8577;
-  --color-line: #ddd5c7;
-  --color-line-strong: #c8bea9;
-  --color-accent: #9d5a3b;
-  --color-accent-soft: #c98a6a;
-  --color-night: #14120e;
-  --color-night-soft: #221e18;
-  --color-sage: #5c6b57;
+  /* Semantic tokens (the requested system) */
+  --color-background: #0b0a09;
+  --color-surface: #14110d;
+  --color-surface-elevated: #1c1712;
+  --color-text-primary: #f2ede3;
+  --color-text-secondary: #a89f8f;
+  --color-border: #2a251f;
+  --color-glass: rgba(255, 255, 255, 0.045);
+  --color-success: #8fae86;
+  --color-error: #d98a6a;
+
+  /* Accents */
+  --color-accent: #c8845a;
+  --color-accent-soft: #e0a97f;
+  --color-champagne: #8a6a44;
+  --color-chrome: #d9d2c4;
+
+  /* Legacy aliases — existing components keep working, now dark */
+  --color-paper: #0b0a09;
+  --color-paper-deep: #14110d;
+  --color-card: #14110d;
+  --color-ink: #f2ede3;
+  --color-ink-soft: #cabfae;
+  --color-muted: #948b7c;
+  --color-line: #2a251f;
+  --color-line-strong: #443c31;
+  --color-night: #070605;
+  --color-night-soft: #16120e;
+  --color-sage: #8fae86;
 
   --font-display: "Didot", "Bodoni MT", "Playfair Display", "Georgia", "Times New Roman",
     serif;
@@ -25,18 +42,19 @@
     sans-serif;
   --font-mono: "SFMono-Regular", "Cascadia Mono", "Consolas", monospace;
 
-  --radius-card: 2px;
+  --radius-card: 3px;
 }
 
 @layer base {
   html {
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    color-scheme: dark;
   }
 
   body {
-    background-color: var(--color-paper);
-    color: var(--color-ink);
+    background-color: var(--color-background);
+    color: var(--color-text-primary);
     font-family: var(--font-sans);
     font-size: 15px;
     line-height: 1.55;
@@ -44,7 +62,7 @@
 
   ::selection {
     background: var(--color-accent);
-    color: #fff;
+    color: #14110d;
   }
 
   h1,
@@ -75,8 +93,43 @@
   font-weight: 600;
 }
 
+/* Frosted fashion-studio glass: translucent, softly blurred, hairline edge. */
+@utility glass {
+  background-color: color-mix(in oklab, var(--color-surface) 72%, transparent);
+  backdrop-filter: blur(18px) saturate(120%);
+  -webkit-backdrop-filter: blur(18px) saturate(120%);
+  border: 1px solid color-mix(in oklab, var(--color-chrome) 14%, transparent);
+}
+
+@utility glass-strong {
+  background-color: color-mix(in oklab, var(--color-surface-elevated) 82%, transparent);
+  backdrop-filter: blur(26px) saturate(125%);
+  -webkit-backdrop-filter: blur(26px) saturate(125%);
+  border: 1px solid color-mix(in oklab, var(--color-chrome) 16%, transparent);
+}
+
+/* A fine metallic hairline used to frame the fitting room and cards. */
+@utility hairline {
+  border: 1px solid color-mix(in oklab, var(--color-chrome) 12%, transparent);
+}
+
+/* Champagne → ivory text, for hero and campaign moments. */
+@utility chrome-text {
+  background: linear-gradient(
+    100deg,
+    var(--color-champagne) 0%,
+    var(--color-chrome) 42%,
+    #ffffff 55%,
+    var(--color-chrome) 68%,
+    var(--color-accent-soft) 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+}
+
 /* ---------------------------------------------------------------- *
- * Atmosphere: fine paper grain, layered behind everything.
+ * Atmosphere: fine grain + a whisper of warmth. Sits behind the shader.
  * ---------------------------------------------------------------- */
 .grain::before {
   content: "";
@@ -84,11 +137,8 @@
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  opacity: 0.5;
-  background-image:
-    radial-gradient(circle at 20% 10%, rgba(157, 90, 59, 0.05), transparent 55%),
-    radial-gradient(circle at 85% 0%, rgba(92, 107, 87, 0.05), transparent 45%),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  opacity: 0.4;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
 }
 
 /* ---------------------------------------------------------------- *
@@ -97,7 +147,7 @@
 @keyframes dressly-rise {
   from {
     opacity: 0;
-    transform: translateY(14px);
+    transform: translateY(16px);
   }
   to {
     opacity: 1;
@@ -114,23 +164,55 @@
   }
 }
 
-@keyframes dressly-reveal {
-  from {
-    clip-path: inset(0 0 0 0);
+@keyframes dressly-sheen {
+  0% {
+    transform: translateX(-120%);
+  }
+  100% {
+    transform: translateX(220%);
   }
 }
 
 .animate-rise {
-  animation: dressly-rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation: dressly-rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
 .animate-fade {
   animation: dressly-fade 0.6s ease both;
 }
 
+/* Sweeping light across a primary surface, on hover. */
+.sheen {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.sheen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-120%);
+  background: linear-gradient(
+    100deg,
+    transparent 20%,
+    color-mix(in oklab, var(--color-chrome) 30%, transparent) 50%,
+    transparent 80%
+  );
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.sheen:hover::after {
+  opacity: 1;
+  animation: dressly-sheen 0.9s ease;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-rise,
-  .animate-fade {
+  .animate-fade,
+  .sheen:hover::after {
     animation: none;
   }
 }
