@@ -66,7 +66,6 @@ export async function startRunway(
       image: media.bytes,
       imageContentType: media.contentType,
       promptText: PROMPT,
-      durationSeconds: 5,
     });
     const job = createJob({
       id: newId("job"),
@@ -74,6 +73,8 @@ export async function startRunway(
       kind: "runway",
       provider: "runway",
       handle,
+      // Without this the finished video can never be attached back to its look.
+      lookId: look.id,
       productId: look.addedProductId,
       productName: "Bring this look to life",
       action: null,
@@ -123,9 +124,11 @@ export async function pollRunway(jobId: string): Promise<PollRunwayResult | null
 
     const fileName = `${job.lookId ?? job.id}.mp4`;
     await writeDataFile(VIDEO_DIR, fileName, state.video);
-    const session = await mutateSession(job.sessionId, (current) =>
-      job.lookId ? setLookVideo(current, job.lookId, mediaUrl("videos", fileName)) : current,
-    );
+    const session = await mutateSession(job.sessionId, (current) => {
+      // Fall back to the active look if an older job predates the `lookId` field.
+      const targetLookId = job.lookId ?? current.activeLookId ?? current.looks.at(-1)?.id;
+      return targetLookId ? setLookVideo(current, targetLookId, mediaUrl("videos", fileName)) : current;
+    });
     updateJob(job.id, { status: "success" });
     return { job: jobView(getJob(job.id) ?? job), session: session ?? undefined };
   } catch (error) {

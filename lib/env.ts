@@ -41,7 +41,16 @@ export const env = {
   /** Runway — optional P2 animation only. */
   runwayApiKey: read("RUNWAY_API_KEY"),
   runwayBaseUrl: read("RUNWAY_API_URL") ?? "https://api.dev.runwayml.com",
+  /**
+   * Any image-to-video model the Runway API exposes, e.g. `gemini_omni_flash_1.1`
+   * (Google's Gemini Omni, hosted by Runway), `gen4_turbo`, `veo3.1`, `seedance2`.
+   * Sent verbatim as the request `model`.
+   */
   runwayModel: read("RUNWAY_MODEL") ?? "gen4_turbo",
+  /** Output aspect ratio; must be one the chosen model supports. */
+  runwayRatio: read("RUNWAY_RATIO") ?? "720:1280",
+  /** Output duration in seconds; must be within the chosen model's range. */
+  runwayDurationSeconds: Number(read("RUNWAY_DURATION_SECONDS") ?? 5),
   runwayEnabled: flag("RUNWAY_ENABLED", false),
 
   /**

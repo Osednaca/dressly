@@ -34,6 +34,7 @@ export function DresslyApp() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [job, setJob] = useState<JobView | null>(null);
   const [blocked, setBlocked] = useState<BlockedView | null>(null);
+  const [understanding, setUnderstanding] = useState<ChatResponse["understanding"] | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -110,6 +111,7 @@ export function DresslyApp() {
         const response: ChatResponse = await api.chat(session.id, message);
         applyPayload(response);
         setBlocked(response.blocked);
+        setUnderstanding(response.understanding);
         if (response.job) await pollJob(response.job);
       } catch (sendError) {
         setError(sendError instanceof Error ? sendError.message : "Something went wrong.");
@@ -189,6 +191,14 @@ export function DresslyApp() {
         const polled = await api.pollJob(result.job.id);
         setAnimationJob(polled.job);
         if (polled.session) setSession(polled.session);
+        if (polled.job.status === "failed") {
+          setAnimationBlocked({
+            code: "RUNWAY_FAILED",
+            message: polled.job.message ?? "Runway could not finish the animation.",
+            retryable: polled.job.retryable ?? true,
+          });
+          return;
+        }
         if (polled.job.status !== "pending") return;
       }
     } catch (animateError) {
@@ -211,6 +221,7 @@ export function DresslyApp() {
     setFinalDismissed(false);
     setAnimationJob(null);
     setAnimationBlocked(null);
+    setUnderstanding(null);
     window.scrollTo({ top: 0 });
   }, []);
 
@@ -249,6 +260,7 @@ export function DresslyApp() {
               suggestions={suggestions}
               busy={working}
               onSend={sendMessage}
+              understanding={understanding}
             />
 
             <LookHistory
