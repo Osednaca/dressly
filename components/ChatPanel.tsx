@@ -11,6 +11,8 @@ interface ChatPanelProps {
   suggestions: Suggestion[];
   busy: boolean;
   onSend: (message: string) => void;
+  /** Which engine parsed the latest message, so the panel can show it honestly. */
+  understanding?: { provider: "gemini" | "fallback"; model: string; note: string } | null;
 }
 
 /** A minimal speech-recognition surface, typed locally so no DOM lib is required. */
@@ -20,9 +22,10 @@ interface SpeechRecognitionLike {
   continuous: boolean;
   start: () => void;
   stop: () => void;
+  onstart: (() => void) | null;
   onresult: ((event: { results: { 0: { 0: { transcript: string } } } }) => void) | null;
   onend: (() => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
 }
 
 function getRecognition(): SpeechRecognitionLike | null {
@@ -35,15 +38,56 @@ function getRecognition(): SpeechRecognitionLike | null {
   return Ctor ? new Ctor() : null;
 }
 
-/** The stylist conversation: natural language in, a decision and a look out. */
-export function ChatPanel({ messages, suggestions, busy, onSend }: ChatPanelProps) {
+function voiceErrorMessage(code: string | undefined): string {
+  switch (code) {
+    case "not-allowed":
+    case "service-not-allowed":
+      return "Microphone access is blocked. Allow it for this site in your browser settings.";
+    case "audio-capture":
+      return "No microphone was found.";
+    case "no-speech":
+      return "I didn't catch that — try again.";
+    case "network":
+      return "Voice input needs a network connection.";
+    case "aborted":
+      return "";
+    default:
+      return "Voice input failed. You can type instead.";
+  }
+}
+
+/**
+ * The stylist conversation: natural language in, a decision and a look out.
+ *
+ * Voice uses the browser's own Web Speech API — Gemini never receives audio, it only
+ * parses the resulting text. If the browser has no speech recognition, the control says
+ * so instead of silently doing nothing.
+ */
+export function ChatPanel({ messages, suggestions, busy, onSend, understanding }: ChatPanelProps) {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
+  const [voiceSupported, setVoiceSupported] = useState<boolean | null>(null);
+  const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const messageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setVoiceSupported(getRecognition() !== null);
+    return () => {
+      if (messageTimer.current) clearTimeout(messageTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length, busy]);
+
+  const flashVoiceMessage = (message: string) => {
+    if (!message) return;
+    setVoiceMessage(message);
+    if (messageTimer.current) clearTimeout(messageTimer.current);
+    messageTimer.current = setTimeout(() => setVoiceMessage(null), 7000);
+  };
 
   const submit = (value: string) => {
     const trimmed = value.trim();
@@ -54,7 +98,11 @@ export function ChatPanel({ messages, suggestions, busy, onSend }: ChatPanelProp
 
   const toggleVoice = () => {
     const recognition = getRecognition();
-    if (!recognition) return;
+    if (!recognition) {
+      setVoiceSupported(false);
+      flashVoiceMessage("Voice input isn't supported in this browser. Try Chrome or Edge.");
+      return;
+    }
     if (listening) {
       recognition.stop();
       setListening(false);
@@ -63,22 +111,50 @@ export function ChatPanel({ messages, suggestions, busy, onSend }: ChatPanelProp
     recognition.lang = typeof navigator !== "undefined" ? navigator.language || "en-US" : "en-US";
     recognition.interimResults = false;
     recognition.continuous = false;
+    recognition.onstart = () => {
+      setListening(true);
+      setVoiceMessage(null);
+    };
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       setText((current) => (current ? `${current} ${transcript}` : transcript));
     };
     recognition.onend = () => setListening(false);
-    recognition.onerror = () => setListening(false);
-    recognition.start();
-    setListening(true);
+    recognition.onerror = (event) => {
+      setListening(false);
+      flashVoiceMessage(voiceErrorMessage(event?.error));
+    };
+    try {
+      recognition.start();
+      setListening(true);
+    } catch {
+      setListening(false);
+      flashVoiceMessage("Voice input could not start. Check microphone permissions.");
+    }
   };
+
+  const voiceDisabled = busy || voiceSupported === false;
 
   return (
     <DresslyGlass shaderSheen className="flex min-h-0 flex-col">
       <header className="relative z-10 flex items-center justify-between border-b border-chrome/10 px-5 py-3">
         <p className="overline text-muted">Stylist</p>
-        <span className="flex items-center gap-1.5 text-[11px] text-muted">
-          <Sparkle width={13} height={13} /> agentic
+        <span className="flex items-center gap-2 text-[11px] text-muted">
+          {understanding ? (
+            <span
+              title={understanding.note || `Understood by ${understanding.model}`}
+              className={`rounded-full border px-2 py-0.5 ${
+                understanding.provider === "gemini"
+                  ? "border-sage/50 text-sage"
+                  : "border-chrome/20 text-muted"
+              }`}
+            >
+              {understanding.provider === "gemini" ? understanding.model : "keywords"}
+            </span>
+          ) : null}
+          <span className="flex items-center gap-1.5">
+            <Sparkle width={13} height={13} /> agentic
+          </span>
         </span>
       </header>
 
@@ -132,6 +208,14 @@ export function ChatPanel({ messages, suggestions, busy, onSend }: ChatPanelProp
           ))}
         </div>
 
+        {listening ? (
+          <p className="mb-2 flex items-center gap-2 text-[12px] text-accent-soft">
+            <span className="h-1.5 w-1.5 animate-ping rounded-full bg-accent" /> Listening… speak now
+          </p>
+        ) : voiceMessage ? (
+          <p className="mb-2 text-[12px] text-error">{voiceMessage}</p>
+        ) : null}
+
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -156,9 +240,14 @@ export function ChatPanel({ messages, suggestions, busy, onSend }: ChatPanelProp
           <button
             type="button"
             onClick={toggleVoice}
-            disabled={busy}
+            disabled={voiceDisabled}
+            title={
+              voiceSupported === false
+                ? "Voice input is not supported in this browser — type instead"
+                : "Voice input"
+            }
             aria-label={listening ? "Stop voice input" : "Start voice input"}
-            className={`flex h-[46px] w-[46px] items-center justify-center rounded-[3px] border transition disabled:opacity-50 ${
+            className={`flex h-[46px] w-[46px] items-center justify-center rounded-[3px] border transition disabled:opacity-40 ${
               listening
                 ? "border-accent bg-accent/10 text-accent-soft"
                 : "border-chrome/15 text-ink-soft hover:border-accent/70"
