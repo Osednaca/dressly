@@ -103,6 +103,19 @@ Host: `https://yce-api-01.makeupar.com` — `Authorization: Bearer <key>`
 | V9 | WebGPU fallback + reduced-motion + mobile degradation | DONE | capability gate in `lib/visual/hooks.ts`; CSS gradients in `config.ts`; `prefers-reduced-motion` in `globals.css` |
 | V10 | Fix live Gemini model (`gemini-2.5-flash` retired) | DONE | `lib/env.ts` default → `gemini-3.8-flash`; verified live |
 
+## Interaction fixes
+
+| # | Fix | Evidence |
+| --- | --- | --- |
+| F1 | Runway video was never attached to its look: `startRunway` omitted `lookId`, so the job reported success but nothing rendered | `lib/agent/runway.ts` now sets `lookId` (+ active-look fallback). Live run: `look.videoPath = /api/media/videos/look_*.mp4`, served `200 video/mp4` (2.5 MB) |
+| F2 | Runway poll failures were silent (loading just vanished) | `components/DresslyApp.tsx` surfaces the failed job into `animationBlocked` |
+| F3 | Voice input silently did nothing when unsupported or denied | `components/ChatPanel.tsx` detects support, disables + explains, surfaces mic/permission errors, shows "Listening…" |
+| F4 | No way to tell whether Gemini actually parsed a message | Chat header chip shows the live model (`gemini-3.8-flash`) or `keywords`, with the fallback reason on hover |
+| F5 | Runway model/ratio/duration were hardcoded to Runway-native values | `RUNWAY_MODEL` / `RUNWAY_RATIO` / `RUNWAY_DURATION_SECONDS` env; Gemini Omni Flash is supported as a first-class model |
+
+Live verification: Gemini `gemini-3.8-flash` + JEV `jev-1.13.0` + YouCam all live; Runway
+`gemini_omni_flash_1.1` generated a real 2.5 MB MP4 attached to the look.
+
 ## Verification evidence
 
 - `npm run typecheck` → no errors.

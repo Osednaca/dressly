@@ -269,9 +269,13 @@ Gemini API versions.
 
 ### Runway — optional (P2)
 
-`gen4_turbo` image-to-video, behind `RUNWAY_ENABLED`. Restrained prompt: natural confident fashion
-movement, subtle body motion, realistic fabric movement, preserve person and outfit exactly,
-cinematic fashion editorial. Never alters the outfit. Never critical to the demo.
+Image-to-video via `POST /v1/image_to_video`, behind `RUNWAY_ENABLED`. `RUNWAY_MODEL` selects any
+image-to-video model Runway hosts — including Google's **Gemini Omni Flash** (`gemini_omni_flash`
+/ `gemini_omni_flash_1.1`) alongside Runway's own `gen4_turbo`, `veo3.1`, `seedance2` and others.
+`RUNWAY_RATIO` and `RUNWAY_DURATION_SECONDS` must be values the chosen model accepts (for
+`gemini_omni_flash_1.1`: `720:1280` or `1280:720`, 3–10s). Restrained prompt: natural confident
+fashion movement, subtle body motion, realistic fabric movement, preserve person and outfit
+exactly, cinematic fashion editorial. Never alters the outfit. Never critical to the demo.
 
 ---
 
@@ -421,10 +425,13 @@ GEMINI_API_KEY=
 GEMINI_MODEL=gemini-3.8-flash
 GEMINI_TIMEOUT_MS=30000
 
-# Runway — optional P2 animation only
+# Runway — optional P2 animation only. Any image-to-video model Runway hosts,
+# e.g. gemini_omni_flash_1.1 (Google Gemini Omni), gen4_turbo, veo3.1.
 RUNWAY_API_KEY=
 RUNWAY_API_URL=https://api.dev.runwayml.com
-RUNWAY_MODEL=gen4_turbo
+RUNWAY_MODEL=gemini_omni_flash_1.1
+RUNWAY_RATIO=720:1280
+RUNWAY_DURATION_SECONDS=5
 RUNWAY_ENABLED=false
 
 # Development only. Never for a recorded or judged demo.

@@ -42,7 +42,13 @@ instead. That still makes real provider calls.
 | YouCam (Perfect Corp) | Core virtual try-on — every worn visual | `YOUCAM_API_KEY` |
 | JEV (TypeSafe System One) | Decision engine | `TYPESAFE_API_KEY` |
 | Gemini | Language understanding | `GEMINI_API_KEY` |
-| Runway | Optional P2 animation | `RUNWAY_API_KEY`, `RUNWAY_ENABLED` |
+| Runway | Optional P2 animation | `RUNWAY_API_KEY`, `RUNWAY_ENABLED`, `RUNWAY_MODEL` |
+
+Runway is a multi-model gateway: `RUNWAY_MODEL` selects any image-to-video model Runway hosts,
+including Google's **Gemini Omni Flash** (`gemini_omni_flash_1.1`) or Runway's own `gen4_turbo`.
+Set `RUNWAY_RATIO` and `RUNWAY_DURATION_SECONDS` to values the chosen model accepts (for
+`gemini_omni_flash_1.1`: `720:1280`/`1280:720`, 3–10s). The "Bring this look to life" button only
+appears on the final look once `/api/providers` reports Runway active.
 
 YouCam is never replaced by another image generator: no other provider produces a garment
 worn by the user. With no YouCam key and mock mode off, Dressly fails closed with an explicit
