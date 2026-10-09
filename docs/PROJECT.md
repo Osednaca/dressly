@@ -267,6 +267,21 @@ nothing to intent parsing. Only YouCam receives it. Structured output is validat
 normalizer rather than a provider-side JSON schema, which keeps the integration tolerant across
 Gemini API versions.
 
+### Gemini Live — the spoken stylist
+
+The mic opens a real-time voice conversation (`gemini-3.8-live`, override with
+`GEMINI_LIVE_MODEL`). `POST /api/sessions/{id}/live` mints a single-use **ephemeral token**
+(`POST v1beta/auth_tokens` with `bidiGenerateContentSetup`) that locks the model, system
+instruction, tools and transcription server-side; the browser then connects straight to
+`BidiGenerateContentConstrained` and never holds the API key.
+
+Live is only the voice. It has two tools: `style_request(message)` runs the normal chat turn
+(intent → JEV → YouCam try-on) and `finish_look()` finishes the session. The tool returns as soon
+as the try-on is submitted; when the job resolves, the browser sends a `[fitting room]` note so
+the stylist can react. Audio: mic → AudioWorklet → 16 kHz PCM16 in, 24 kHz PCM16 out, with
+barge-in. Typed messages during a live session go to the live stylist. Only microphone audio
+is streamed to Gemini — the photo still goes only to YouCam.
+
 ### Runway — optional (P2)
 
 Image-to-video via `POST /v1/image_to_video`, behind `RUNWAY_ENABLED`. `RUNWAY_MODEL` selects any

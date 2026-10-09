@@ -37,6 +37,8 @@ export const env = {
   geminiApiKey: read("GEMINI_API_KEY"),
   geminiModel: read("GEMINI_MODEL") ?? "gemini-3.8-flash",
   geminiTimeoutMs: Number(read("GEMINI_TIMEOUT_MS") ?? 30_000),
+  /** Gemini Live — the real-time spoken stylist. */
+  geminiLiveModel: read("GEMINI_LIVE_MODEL") ?? "gemini-3.8-live",
 
   /** Runway — optional P2 animation only. */
   runwayApiKey: read("RUNWAY_API_KEY"),

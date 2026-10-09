@@ -4,8 +4,17 @@ import { useEffect, useRef, useState } from "react";
 import { Mic, Send, Sparkle } from "@/components/icons";
 import { DresslyGlass } from "@/components/shaders/DresslyGlass";
 import type { Suggestion } from "@/lib/api-types";
+import type { LiveCaptions } from "@/lib/client/use-live-stylist";
+import type { LiveStatus } from "@/lib/client/live";
 import type { ChatMessage } from "@/lib/types";
-import { toWav } from "@/lib/client/audio";
+
+interface LiveControls {
+  status: LiveStatus;
+  error: string | null;
+  captions: LiveCaptions;
+  active: boolean;
+  onToggle: () => void;
+}
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -14,229 +23,33 @@ interface ChatPanelProps {
   onSend: (message: string) => void;
   /** Which engine parsed the latest message, so the panel can show it honestly. */
   understanding?: { provider: "gemini" | "fallback"; model: string; note: string } | null;
-  /** Server transcription, used when the browser's own speech recognition can't work. */
-  onTranscribe?: (audio: Blob) => Promise<string>;
-}
-
-const MAX_RECORDING_MS = 30_000;
-
-function canRecord(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof MediaRecorder !== "undefined" &&
-    Boolean(navigator.mediaDevices?.getUserMedia)
-  );
-}
-
-/** Brave ships webkitSpeechRecognition but has no Google speech backend, so it always fails. */
-function isBrave(): boolean {
-  return typeof navigator !== "undefined" && "brave" in navigator;
-}
-
-/** A minimal speech-recognition surface, typed locally so no DOM lib is required. */
-interface SpeechRecognitionLike {
-  lang: string;
-  interimResults: boolean;
-  continuous: boolean;
-  start: () => void;
-  stop: () => void;
-  onstart: (() => void) | null;
-  onresult: ((event: { results: { 0: { 0: { transcript: string } } } }) => void) | null;
-  onend: (() => void) | null;
-  onerror: ((event: { error?: string }) => void) | null;
-}
-
-function getRecognition(): SpeechRecognitionLike | null {
-  if (typeof window === "undefined") return null;
-  const w = window as unknown as {
-    SpeechRecognition?: new () => SpeechRecognitionLike;
-    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-  };
-  const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
-  return Ctor ? new Ctor() : null;
-}
-
-function voiceErrorMessage(code: string | undefined): string {
-  switch (code) {
-    case "not-allowed":
-    case "service-not-allowed":
-      return "Microphone access is blocked. Allow it for this site in your browser settings.";
-    case "audio-capture":
-      return "No microphone was found.";
-    case "no-speech":
-      return "I didn't catch that — try again.";
-    case "network":
-      return "Voice input needs a network connection.";
-    case "aborted":
-      return "";
-    default:
-      return "Voice input failed. You can type instead.";
-  }
+  /** The Gemini Live voice session. */
+  live: LiveControls;
 }
 
 /**
  * The stylist conversation: natural language in, a decision and a look out.
  *
- * Voice prefers the browser's own Web Speech API. When that is missing or its speech
- * service is unreachable (Brave, Firefox, embedded webviews), the clip is recorded and
- * transcribed server-side by Gemini instead. Either way the result lands in the text
- * box for the shopper to review before sending.
+ * The mic opens a live spoken conversation with the stylist (Gemini Live). The stylist
+ * answers by voice and drives the same styling turn — and therefore the same try-on —
+ * as typing does. Typed messages during a live session go to the live stylist.
  */
-export function ChatPanel({
-  messages,
-  suggestions,
-  busy,
-  onSend,
-  understanding,
-  onTranscribe,
-}: ChatPanelProps) {
+export function ChatPanel({ messages, suggestions, busy, onSend, understanding, live }: ChatPanelProps) {
   const [text, setText] = useState("");
-  const [listening, setListening] = useState(false);
-  const [transcribing, setTranscribing] = useState(false);
-  const [voiceSupported, setVoiceSupported] = useState<boolean | null>(null);
-  const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const messageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const recordTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const serverVoice = useRef(false);
-
-  useEffect(() => {
-    const browserVoice = getRecognition() !== null;
-    const recordable = Boolean(onTranscribe) && canRecord();
-    serverVoice.current = recordable && (isBrave() || !browserVoice);
-    setVoiceSupported(browserVoice || recordable);
-  }, [onTranscribe]);
-
-  useEffect(
-    () => () => {
-      if (messageTimer.current) clearTimeout(messageTimer.current);
-      if (recordTimer.current) clearTimeout(recordTimer.current);
-      recognitionRef.current?.stop();
-      recorderRef.current?.stream.getTracks().forEach((track) => track.stop());
-    },
-    [],
-  );
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [messages.length, busy]);
 
-  const flashVoiceMessage = (message: string) => {
-    if (!message) return;
-    setVoiceMessage(message);
-    if (messageTimer.current) clearTimeout(messageTimer.current);
-    messageTimer.current = setTimeout(() => setVoiceMessage(null), 7000);
-  };
+  const inputLocked = busy && !live.active;
 
   const submit = (value: string) => {
     const trimmed = value.trim();
-    if (!trimmed || busy) return;
+    if (!trimmed || inputLocked) return;
     onSend(trimmed);
     setText("");
   };
-
-  const appendTranscript = (transcript: string) =>
-    setText((current) => (current ? `${current} ${transcript}` : transcript));
-
-  const startRecording = async () => {
-    if (!onTranscribe || !canRecord()) {
-      flashVoiceMessage("Voice input isn't supported in this browser. You can type instead.");
-      return;
-    }
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (error) {
-      flashVoiceMessage(
-        error instanceof DOMException && error.name === "NotFoundError"
-          ? "No microphone was found."
-          : "Microphone access is blocked. Allow it for this site in your browser settings.",
-      );
-      return;
-    }
-    const recorder = new MediaRecorder(stream);
-    const chunks: Blob[] = [];
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) chunks.push(event.data);
-    };
-    recorder.onstop = async () => {
-      stream.getTracks().forEach((track) => track.stop());
-      if (recordTimer.current) clearTimeout(recordTimer.current);
-      recorderRef.current = null;
-      setListening(false);
-      if (chunks.length === 0) return;
-      setTranscribing(true);
-      try {
-        const audio = await toWav(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }));
-        const transcript = (await onTranscribe(audio)).trim();
-        if (transcript) appendTranscript(transcript);
-        else flashVoiceMessage("I didn't catch that — try again.");
-      } catch (error) {
-        flashVoiceMessage(error instanceof Error ? error.message : "Transcription failed. You can type instead.");
-      } finally {
-        setTranscribing(false);
-      }
-    };
-    recorderRef.current = recorder;
-    recorder.start();
-    setListening(true);
-    setVoiceMessage(null);
-    recordTimer.current = setTimeout(() => {
-      if (recorder.state === "recording") recorder.stop();
-    }, MAX_RECORDING_MS);
-  };
-
-  const toggleVoice = () => {
-    if (listening) {
-      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
-      else recognitionRef.current?.stop();
-      setListening(false);
-      return;
-    }
-    if (serverVoice.current) {
-      void startRecording();
-      return;
-    }
-    const recognition = getRecognition();
-    if (!recognition) {
-      setVoiceSupported(false);
-      flashVoiceMessage("Voice input isn't supported in this browser. Try Chrome or Edge.");
-      return;
-    }
-    recognitionRef.current = recognition;
-    recognition.lang = typeof navigator !== "undefined" ? navigator.language || "en-US" : "en-US";
-    recognition.interimResults = false;
-    recognition.continuous = false;
-    recognition.onstart = () => {
-      setListening(true);
-      setVoiceMessage(null);
-    };
-    recognition.onresult = (event) => appendTranscript(event.results[0][0].transcript);
-    recognition.onend = () => {
-      setListening(false);
-      recognitionRef.current = null;
-    };
-    recognition.onerror = (event) => {
-      setListening(false);
-      if (event?.error === "network" && onTranscribe && canRecord()) {
-        serverVoice.current = true;
-        void startRecording();
-        return;
-      }
-      flashVoiceMessage(voiceErrorMessage(event?.error));
-    };
-    try {
-      recognition.start();
-      setListening(true);
-    } catch {
-      setListening(false);
-      flashVoiceMessage("Voice input could not start. Check microphone permissions.");
-    }
-  };
-
-  const voiceDisabled = busy || transcribing || voiceSupported === false;
 
   return (
     <DresslyGlass shaderSheen className="flex min-h-0 flex-col">
@@ -298,7 +111,7 @@ export function ChatPanel({
             <button
               key={suggestion.message}
               type="button"
-              disabled={busy}
+              disabled={inputLocked}
               onClick={() => submit(suggestion.message)}
               className={`rounded-full border px-3 py-1.5 text-[12px] transition disabled:opacity-50 ${
                 suggestion.primary
@@ -311,16 +124,32 @@ export function ChatPanel({
           ))}
         </div>
 
-        {listening ? (
+        {live.status === "connecting" ? (
           <p className="mb-2 flex items-center gap-2 text-[12px] text-accent-soft">
-            <span className="h-1.5 w-1.5 animate-ping rounded-full bg-accent" /> Listening… speak now
+            <span className="h-1.5 w-1.5 animate-ping rounded-full bg-accent" /> Connecting to your
+            stylist…
           </p>
-        ) : transcribing ? (
-          <p className="mb-2 flex items-center gap-2 text-[12px] text-accent-soft">
-            <span className="h-1.5 w-1.5 animate-ping rounded-full bg-accent" /> Transcribing…
-          </p>
-        ) : voiceMessage ? (
-          <p className="mb-2 text-[12px] text-error">{voiceMessage}</p>
+        ) : live.status === "live" ? (
+          <div className="mb-2 space-y-1 rounded-[3px] border border-accent/30 bg-accent/5 px-3 py-2 text-[12px]">
+            <p className="flex items-center gap-2 text-accent-soft">
+              <span className="h-1.5 w-1.5 animate-ping rounded-full bg-accent" /> Live — just talk.
+              Tap the mic to end.
+            </p>
+            {live.captions.user ? (
+              <p className="text-text-secondary">
+                <span className="text-muted">You: </span>
+                {live.captions.user}
+              </p>
+            ) : null}
+            {live.captions.dressly ? (
+              <p className="text-text-primary">
+                <span className="text-muted">Dressly: </span>
+                {live.captions.dressly}
+              </p>
+            ) : null}
+          </div>
+        ) : live.error ? (
+          <p className="mb-2 text-[12px] text-error">{live.error}</p>
         ) : null}
 
         <form
@@ -340,23 +169,19 @@ export function ChatPanel({
               }
             }}
             rows={1}
-            disabled={busy}
-            placeholder={busy ? "Working on your look…" : "Tell Dressly what you think…"}
+            disabled={inputLocked}
+            placeholder={inputLocked ? "Working on your look…" : "Tell Dressly what you think…"}
             className="max-h-32 min-h-[46px] flex-1 resize-none rounded-[3px] border border-chrome/15 bg-black/25 px-3.5 py-3 text-[14px] text-text-primary outline-none transition placeholder:text-muted focus:border-accent/70 disabled:opacity-60"
           />
           <button
             type="button"
-            onClick={toggleVoice}
-            disabled={voiceDisabled}
-            title={
-              voiceSupported === false
-                ? "Voice input is not supported in this browser — type instead"
-                : "Voice input"
-            }
-            aria-label={listening ? "Stop voice input" : "Start voice input"}
-            className={`flex h-[46px] w-[46px] items-center justify-center rounded-[3px] border transition disabled:opacity-40 ${
-              listening
-                ? "border-accent bg-accent/10 text-accent-soft"
+            onClick={live.onToggle}
+            title={live.active ? "End the live conversation" : "Talk live with your stylist"}
+            aria-label={live.active ? "End live conversation" : "Start live conversation"}
+            aria-pressed={live.active}
+            className={`flex h-[46px] w-[46px] items-center justify-center rounded-[3px] border transition ${
+              live.active
+                ? "border-accent bg-accent/15 text-accent-soft"
                 : "border-chrome/15 text-ink-soft hover:border-accent/70"
             }`}
           >
@@ -364,7 +189,7 @@ export function ChatPanel({
           </button>
           <button
             type="submit"
-            disabled={busy || text.trim().length === 0}
+            disabled={inputLocked || text.trim().length === 0}
             aria-label="Send message"
             className="sheen flex h-[46px] w-[46px] items-center justify-center rounded-[3px] border border-chrome/20 bg-ink text-paper transition hover:bg-accent hover:text-night disabled:border-chrome/10 disabled:bg-white/[0.04] disabled:text-muted"
           >

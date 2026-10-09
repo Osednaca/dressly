@@ -12,6 +12,8 @@ import { ProviderBanner } from "@/components/ProviderBanner";
 import { DresslyAmbient } from "@/components/shaders/DresslyAmbient";
 import { Sparkle } from "@/components/icons";
 import { api } from "@/lib/client/api";
+import type { LiveToolCall } from "@/lib/client/live";
+import { useLiveStylist } from "@/lib/client/use-live-stylist";
 import type { BlockedView, ChatResponse, JobView, SessionPayload, Suggestion } from "@/lib/api-types";
 import type { StylingSession } from "@/lib/types";
 
@@ -65,40 +67,43 @@ export function DresslyApp() {
     setSuggestions(payload.suggestions);
   }, []);
 
-  const pollJob = useCallback(async (initial: JobView) => {
+  /** Polls a job to completion; resolves with the final job, or null if superseded. */
+  const pollJob = useCallback(async (initial: JobView): Promise<JobView | null> => {
     const token = ++pollToken.current;
     setJob(initial);
     for (let index = 0; index < MAX_POLLS; index += 1) {
       await delay(POLL_INTERVAL_MS);
-      if (pollToken.current !== token) return;
+      if (pollToken.current !== token) return null;
       try {
         const result = await api.pollJob(initial.id);
-        if (pollToken.current !== token) return;
+        if (pollToken.current !== token) return null;
         setJob(result.job);
         if (result.session) {
           setSession(result.session);
           if (result.suggestions) setSuggestions(result.suggestions);
         }
-        if (result.job.status !== "pending") return;
+        if (result.job.status !== "pending") return result.job;
       } catch (pollError) {
-        if (pollToken.current !== token) return;
-        setJob({
+        if (pollToken.current !== token) return null;
+        const failed: JobView = {
           ...initial,
           status: "failed",
           message: pollError instanceof Error ? pollError.message : "Lost contact with the server.",
           retryable: true,
-        });
-        return;
+        };
+        setJob(failed);
+        return failed;
       }
     }
-    if (pollToken.current === token) {
-      setJob({
-        ...initial,
-        status: "failed",
-        message: "This try-on is taking too long. Try again or choose another piece.",
-        retryable: true,
-      });
-    }
+    if (pollToken.current !== token) return null;
+    const timedOut: JobView = {
+      ...initial,
+      status: "failed",
+      message: "This try-on is taking too long. Try again or choose another piece.",
+      retryable: true,
+    };
+    setJob(timedOut);
+    return timedOut;
   }, []);
 
   const sendMessage = useCallback(
@@ -152,12 +157,62 @@ export function DresslyApp() {
   );
 
   const sessionId = session?.id;
-  const transcribe = useCallback(
-    async (audio: Blob) => {
-      if (!sessionId) throw new Error("Start a session before using voice.");
-      return (await api.transcribe(sessionId, audio)).text;
+  const liveNotify = useRef<((text: string) => void) | null>(null);
+
+  /** Gemini Live tool calls run the exact same styling turn as a typed message. */
+  const runLiveTool = useCallback(
+    async (call: LiveToolCall): Promise<Record<string, unknown>> => {
+      if (!sessionId) throw new Error("There is no styling session yet.");
+      if (call.name === "finish_look") {
+        applyPayload(await api.finish(sessionId));
+        return { finished: true };
+      }
+      if (call.name !== "style_request") throw new Error(`Unknown tool ${call.name}`);
+
+      const message = typeof call.args.message === "string" ? call.args.message.trim() : "";
+      if (!message) throw new Error("The request was empty.");
+      setSending(true);
+      setError(null);
+      setBlocked(null);
+      try {
+        const response = await api.chat(sessionId, message.slice(0, 600));
+        applyPayload(response);
+        setBlocked(response.blocked);
+        setUnderstanding(response.understanding);
+        if (response.job) {
+          void pollJob(response.job).then((final) => {
+            if (!final) return;
+            liveNotify.current?.(
+              final.status === "success"
+                ? "The try-on is ready — the shopper now sees the new piece on themselves."
+                : `The try-on failed: ${final.message ?? "unknown error"}.`,
+            );
+          });
+        }
+        const reply = [...response.session.messages].reverse().find((item) => item.role === "dressly");
+        const look = response.session.currentLook;
+        return {
+          reply: reply?.text ?? "",
+          tryOn: response.job ? "started" : response.blocked ? "blocked" : "none",
+          blockedReason: response.blocked?.message ?? "",
+          nextPiece: response.decision?.selectedProductName ?? "",
+          currentLook: [look.top, look.bottom, look.outer, look.shoes, ...look.accessories]
+            .filter((item) => item !== undefined)
+            .map((item) => item.name),
+        };
+      } finally {
+        setSending(false);
+      }
     },
-    [sessionId],
+    [applyPayload, pollJob, sessionId],
+  );
+
+  const live = useLiveStylist(sessionId, runLiveTool);
+  liveNotify.current = live.notify;
+
+  const onSend = useCallback(
+    (message: string) => (live.active ? live.sendText(message) : void sendMessage(message)),
+    [live, sendMessage],
   );
 
   const onRetry = useCallback(
@@ -268,9 +323,15 @@ export function DresslyApp() {
               messages={session.messages}
               suggestions={suggestions}
               busy={working}
-              onSend={sendMessage}
+              onSend={onSend}
               understanding={understanding}
-              onTranscribe={transcribe}
+              live={{
+                status: live.status,
+                error: live.error,
+                captions: live.captions,
+                active: live.active,
+                onToggle: () => (live.active ? live.stop() : void live.start()),
+              }}
             />
 
             <LookHistory

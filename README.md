@@ -41,7 +41,7 @@ instead. That still makes real provider calls.
 | --- | --- | --- |
 | YouCam (Perfect Corp) | Core virtual try-on — every worn visual | `YOUCAM_API_KEY` |
 | JEV (TypeSafe System One) | Decision engine | `TYPESAFE_API_KEY` |
-| Gemini | Language understanding | `GEMINI_API_KEY` |
+| Gemini | Language understanding + live voice stylist (Gemini Live) | `GEMINI_API_KEY`, `GEMINI_LIVE_MODEL` |
 | Runway | Optional P2 animation | `RUNWAY_API_KEY`, `RUNWAY_ENABLED`, `RUNWAY_MODEL` |
 
 Runway is a multi-model gateway: `RUNWAY_MODEL` selects any image-to-video model Runway hosts,
