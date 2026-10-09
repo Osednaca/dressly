@@ -51,6 +51,11 @@ export const api = {
     form.append("file", file);
     return request<SessionPayload>(`/api/sessions/${id}/photo`, { method: "POST", body: form });
   },
+  transcribe: (id: string, audio: Blob) => {
+    const form = new FormData();
+    form.append("file", audio, "voice");
+    return request<{ text: string }>(`/api/sessions/${id}/transcribe`, { method: "POST", body: form });
+  },
   chat: (id: string, message: string) => postJson<ChatResponse>(`/api/sessions/${id}/chat`, { message }),
   pollJob: (jobId: string) => request<JobPollResponse>(`/api/jobs/${jobId}`),
   retryJob: (jobId: string) =>

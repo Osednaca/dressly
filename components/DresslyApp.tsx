@@ -102,13 +102,13 @@ export function DresslyApp() {
   }, []);
 
   const sendMessage = useCallback(
-    async (message: string) => {
-      if (!session) return;
+    async (message: string, sessionId: string | undefined = session?.id) => {
+      if (!sessionId) return;
       setSending(true);
       setError(null);
       setBlocked(null);
       try {
-        const response: ChatResponse = await api.chat(session.id, message);
+        const response: ChatResponse = await api.chat(sessionId, message);
         applyPayload(response);
         setBlocked(response.blocked);
         setUnderstanding(response.understanding);
@@ -140,7 +140,7 @@ export function DresslyApp() {
         setFinalDismissed(false);
         setCartAdded(false);
         setOnboardingBusy(false);
-        await sendMessage(occasion);
+        await sendMessage(occasion, current.id);
       } catch (beginError) {
         setOnboardingError(
           beginError instanceof Error ? beginError.message : "Could not start the session.",
@@ -149,6 +149,15 @@ export function DresslyApp() {
       }
     },
     [sendMessage],
+  );
+
+  const sessionId = session?.id;
+  const transcribe = useCallback(
+    async (audio: Blob) => {
+      if (!sessionId) throw new Error("Start a session before using voice.");
+      return (await api.transcribe(sessionId, audio)).text;
+    },
+    [sessionId],
   );
 
   const onRetry = useCallback(
@@ -261,6 +270,7 @@ export function DresslyApp() {
               busy={working}
               onSend={sendMessage}
               understanding={understanding}
+              onTranscribe={transcribe}
             />
 
             <LookHistory

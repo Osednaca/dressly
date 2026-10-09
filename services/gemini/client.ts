@@ -216,6 +216,58 @@ export async function parseIntent(
   return { intent: normalizeIntent(parsed), model: env.geminiModel };
 }
 
+/**
+ * Speech-to-text for browsers whose Web Speech API is missing or cannot reach its
+ * speech service (Brave, Firefox, embedded webviews). Only the short voice clip is
+ * sent — never the shopper's photo — and the transcript then follows the normal
+ * text path through `parseIntent`.
+ */
+export async function transcribeAudio(audio: Buffer, mimeType: string): Promise<string> {
+  if (!env.geminiApiKey) {
+    throw new ProviderError("gemini", 401, "GEMINI_API_KEY is not configured");
+  }
+
+  const response = await requestJson<GeminiResponse>(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      env.geminiModel,
+    )}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": env.geminiApiKey,
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inline_data: { mime_type: mimeType, data: audio.toString("base64") } },
+              {
+                text: "Transcribe this voice message verbatim in the language it is spoken. Return only the transcript text, with no quotes or commentary. If there is no intelligible speech, return an empty string.",
+              },
+            ],
+          },
+        ],
+        generationConfig: { temperature: 0, maxOutputTokens: 400 },
+      }),
+    },
+    { provider: "gemini", timeoutMs: env.geminiTimeoutMs, retries: 1 },
+  );
+
+  if (!response.ok) {
+    throw new ProviderError(
+      "gemini",
+      response.status,
+      response.data?.error?.message ?? `HTTP ${response.status}`,
+      { retryable: response.status >= 500 || response.status === 429, body: response.text },
+    );
+  }
+
+  const text = response.data?.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("");
+  return (text ?? "").trim().replace(/^"(.*)"$/s, "$1");
+}
+
 /** Models sometimes wrap JSON in a markdown fence even when asked not to. */
 function stripCodeFence(text: string): string {
   const trimmed = text.trim();

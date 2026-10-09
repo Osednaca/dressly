@@ -5,6 +5,7 @@ import { Mic, Send, Sparkle } from "@/components/icons";
 import { DresslyGlass } from "@/components/shaders/DresslyGlass";
 import type { Suggestion } from "@/lib/api-types";
 import type { ChatMessage } from "@/lib/types";
+import { toWav } from "@/lib/client/audio";
 
 interface ChatPanelProps {
   messages: ChatMessage[];
@@ -13,6 +14,23 @@ interface ChatPanelProps {
   onSend: (message: string) => void;
   /** Which engine parsed the latest message, so the panel can show it honestly. */
   understanding?: { provider: "gemini" | "fallback"; model: string; note: string } | null;
+  /** Server transcription, used when the browser's own speech recognition can't work. */
+  onTranscribe?: (audio: Blob) => Promise<string>;
+}
+
+const MAX_RECORDING_MS = 30_000;
+
+function canRecord(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof MediaRecorder !== "undefined" &&
+    Boolean(navigator.mediaDevices?.getUserMedia)
+  );
+}
+
+/** Brave ships webkitSpeechRecognition but has no Google speech backend, so it always fails. */
+function isBrave(): boolean {
+  return typeof navigator !== "undefined" && "brave" in navigator;
 }
 
 /** A minimal speech-recognition surface, typed locally so no DOM lib is required. */
@@ -59,24 +77,47 @@ function voiceErrorMessage(code: string | undefined): string {
 /**
  * The stylist conversation: natural language in, a decision and a look out.
  *
- * Voice uses the browser's own Web Speech API — Gemini never receives audio, it only
- * parses the resulting text. If the browser has no speech recognition, the control says
- * so instead of silently doing nothing.
+ * Voice prefers the browser's own Web Speech API. When that is missing or its speech
+ * service is unreachable (Brave, Firefox, embedded webviews), the clip is recorded and
+ * transcribed server-side by Gemini instead. Either way the result lands in the text
+ * box for the shopper to review before sending.
  */
-export function ChatPanel({ messages, suggestions, busy, onSend, understanding }: ChatPanelProps) {
+export function ChatPanel({
+  messages,
+  suggestions,
+  busy,
+  onSend,
+  understanding,
+  onTranscribe,
+}: ChatPanelProps) {
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const [voiceSupported, setVoiceSupported] = useState<boolean | null>(null);
   const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const messageTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recordTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const serverVoice = useRef(false);
 
   useEffect(() => {
-    setVoiceSupported(getRecognition() !== null);
-    return () => {
+    const browserVoice = getRecognition() !== null;
+    const recordable = Boolean(onTranscribe) && canRecord();
+    serverVoice.current = recordable && (isBrave() || !browserVoice);
+    setVoiceSupported(browserVoice || recordable);
+  }, [onTranscribe]);
+
+  useEffect(
+    () => () => {
       if (messageTimer.current) clearTimeout(messageTimer.current);
-    };
-  }, []);
+      if (recordTimer.current) clearTimeout(recordTimer.current);
+      recognitionRef.current?.stop();
+      recorderRef.current?.stream.getTracks().forEach((track) => track.stop());
+    },
+    [],
+  );
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
@@ -96,18 +137,75 @@ export function ChatPanel({ messages, suggestions, busy, onSend, understanding }
     setText("");
   };
 
+  const appendTranscript = (transcript: string) =>
+    setText((current) => (current ? `${current} ${transcript}` : transcript));
+
+  const startRecording = async () => {
+    if (!onTranscribe || !canRecord()) {
+      flashVoiceMessage("Voice input isn't supported in this browser. You can type instead.");
+      return;
+    }
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (error) {
+      flashVoiceMessage(
+        error instanceof DOMException && error.name === "NotFoundError"
+          ? "No microphone was found."
+          : "Microphone access is blocked. Allow it for this site in your browser settings.",
+      );
+      return;
+    }
+    const recorder = new MediaRecorder(stream);
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (event) => {
+      if (event.data.size > 0) chunks.push(event.data);
+    };
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((track) => track.stop());
+      if (recordTimer.current) clearTimeout(recordTimer.current);
+      recorderRef.current = null;
+      setListening(false);
+      if (chunks.length === 0) return;
+      setTranscribing(true);
+      try {
+        const audio = await toWav(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }));
+        const transcript = (await onTranscribe(audio)).trim();
+        if (transcript) appendTranscript(transcript);
+        else flashVoiceMessage("I didn't catch that — try again.");
+      } catch (error) {
+        flashVoiceMessage(error instanceof Error ? error.message : "Transcription failed. You can type instead.");
+      } finally {
+        setTranscribing(false);
+      }
+    };
+    recorderRef.current = recorder;
+    recorder.start();
+    setListening(true);
+    setVoiceMessage(null);
+    recordTimer.current = setTimeout(() => {
+      if (recorder.state === "recording") recorder.stop();
+    }, MAX_RECORDING_MS);
+  };
+
   const toggleVoice = () => {
+    if (listening) {
+      if (recorderRef.current?.state === "recording") recorderRef.current.stop();
+      else recognitionRef.current?.stop();
+      setListening(false);
+      return;
+    }
+    if (serverVoice.current) {
+      void startRecording();
+      return;
+    }
     const recognition = getRecognition();
     if (!recognition) {
       setVoiceSupported(false);
       flashVoiceMessage("Voice input isn't supported in this browser. Try Chrome or Edge.");
       return;
     }
-    if (listening) {
-      recognition.stop();
-      setListening(false);
-      return;
-    }
+    recognitionRef.current = recognition;
     recognition.lang = typeof navigator !== "undefined" ? navigator.language || "en-US" : "en-US";
     recognition.interimResults = false;
     recognition.continuous = false;
@@ -115,13 +213,18 @@ export function ChatPanel({ messages, suggestions, busy, onSend, understanding }
       setListening(true);
       setVoiceMessage(null);
     };
-    recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      setText((current) => (current ? `${current} ${transcript}` : transcript));
+    recognition.onresult = (event) => appendTranscript(event.results[0][0].transcript);
+    recognition.onend = () => {
+      setListening(false);
+      recognitionRef.current = null;
     };
-    recognition.onend = () => setListening(false);
     recognition.onerror = (event) => {
       setListening(false);
+      if (event?.error === "network" && onTranscribe && canRecord()) {
+        serverVoice.current = true;
+        void startRecording();
+        return;
+      }
       flashVoiceMessage(voiceErrorMessage(event?.error));
     };
     try {
@@ -133,7 +236,7 @@ export function ChatPanel({ messages, suggestions, busy, onSend, understanding }
     }
   };
 
-  const voiceDisabled = busy || voiceSupported === false;
+  const voiceDisabled = busy || transcribing || voiceSupported === false;
 
   return (
     <DresslyGlass shaderSheen className="flex min-h-0 flex-col">
@@ -211,6 +314,10 @@ export function ChatPanel({ messages, suggestions, busy, onSend, understanding }
         {listening ? (
           <p className="mb-2 flex items-center gap-2 text-[12px] text-accent-soft">
             <span className="h-1.5 w-1.5 animate-ping rounded-full bg-accent" /> Listening… speak now
+          </p>
+        ) : transcribing ? (
+          <p className="mb-2 flex items-center gap-2 text-[12px] text-accent-soft">
+            <span className="h-1.5 w-1.5 animate-ping rounded-full bg-accent" /> Transcribing…
           </p>
         ) : voiceMessage ? (
           <p className="mb-2 text-[12px] text-error">{voiceMessage}</p>

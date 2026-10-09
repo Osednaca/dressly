@@ -4,6 +4,7 @@ import { parseIntentDeterministic } from "@/services/gemini/fallback";
 import {
   isGeminiConfigured,
   parseIntent,
+  transcribeAudio,
   type SessionContext,
 } from "@/services/gemini/client";
 
@@ -57,5 +58,5 @@ export async function understand(
   }
 }
 
-export { isGeminiConfigured, parseIntentDeterministic };
+export { isGeminiConfigured, parseIntentDeterministic, transcribeAudio };
 export type { SessionContext };
