@@ -30,8 +30,10 @@ export function ProviderBanner() {
 
   if (!data) return null;
 
-  const live = data.statuses.filter((status) => status.active).length;
-  const total = data.statuses.length;
+  // The decision engine is internal technology, not something shoppers need to see.
+  const statuses = data.statuses.filter((status) => status.id !== "jev");
+  const live = statuses.filter((status) => status.active).length;
+  const total = statuses.length;
 
   return (
     <div className="relative z-10 border-b border-chrome/10 bg-background/40 backdrop-blur-md">
@@ -40,7 +42,7 @@ export function ProviderBanner() {
           {data.mock ? "Simulation" : `${live}/${total} providers live`}
         </span>
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-          {data.statuses.map((status) => (
+          {statuses.map((status) => (
             <span key={status.id} className="flex items-center gap-1.5 text-[11px] text-ink-soft">
               <span
                 className="inline-block h-1.5 w-1.5 rounded-full"

@@ -38,7 +38,7 @@ export function Onboarding({ busy, error, onBegin }: OnboardingProps) {
   return (
     <div className="relative z-10 mx-auto grid max-w-[1500px] gap-12 px-6 py-12 md:grid-cols-[1.05fr_0.95fr] md:px-10 md:py-20 lg:gap-24">
       <section className="animate-rise flex flex-col justify-center">
-        <p className="overline mb-6 text-accent-soft">YouCam · JEV · Gemini</p>
+        <p className="overline mb-6 text-accent-soft">YouCam · Gemini</p>
         <h1 className="text-[clamp(2.8rem,6.4vw,5rem)] leading-[0.96] text-text-primary">
           Don&rsquo;t browse
           <br />

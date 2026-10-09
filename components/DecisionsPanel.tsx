@@ -40,8 +40,8 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
  * Agent Decisions panel.
  *
  * Structured material only: the alternatives the agent considered and the scores it
- * assigned. Never raw chain-of-thought, and always labelled with the engine that
- * actually produced the decision so a fallback is visible rather than hidden.
+ * assigned. Never raw chain-of-thought. The decision engine itself is not named in
+ * the shopper-facing UI; its provenance stays on the DecisionRecord.
  */
 export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
   const [open, setOpen] = useState(true);
@@ -57,17 +57,6 @@ export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
       >
         <span className="overline text-muted">Agent decisions</span>
         <span className="flex items-center gap-2 text-[11px] text-muted">
-          {latest ? (
-            <span
-              className={`rounded-full border px-2 py-0.5 ${
-                latest.provider === "jev"
-                  ? "border-sage/50 text-sage"
-                  : "border-line-strong text-muted"
-              }`}
-            >
-              {latest.provider === "jev" ? `JEV · ${latest.model ?? ""}` : "deterministic fallback"}
-            </span>
-          ) : null}
           <ChevronDown
             width={16}
             height={16}
