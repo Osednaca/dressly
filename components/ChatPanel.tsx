@@ -21,8 +21,6 @@ interface ChatPanelProps {
   suggestions: Suggestion[];
   busy: boolean;
   onSend: (message: string) => void;
-  /** Which engine parsed the latest message, so the panel can show it honestly. */
-  understanding?: { provider: "gemini" | "fallback"; model: string; note: string } | null;
   /** The Gemini Live voice session. */
   live: LiveControls;
 }
@@ -34,7 +32,7 @@ interface ChatPanelProps {
  * answers by voice and drives the same styling turn — and therefore the same try-on —
  * as typing does. Typed messages during a live session go to the live stylist.
  */
-export function ChatPanel({ messages, suggestions, busy, onSend, understanding, live }: ChatPanelProps) {
+export function ChatPanel({ messages, suggestions, busy, onSend, live }: ChatPanelProps) {
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -55,23 +53,7 @@ export function ChatPanel({ messages, suggestions, busy, onSend, understanding, 
     <DresslyGlass shaderSheen className="flex min-h-0 flex-col">
       <header className="relative z-10 flex items-center justify-between border-b border-chrome/10 px-5 py-3">
         <p className="overline text-muted">Stylist</p>
-        <span className="flex items-center gap-2 text-[11px] text-muted">
-          {understanding ? (
-            <span
-              title={understanding.note || `Understood by ${understanding.model}`}
-              className={`rounded-full border px-2 py-0.5 ${
-                understanding.provider === "gemini"
-                  ? "border-sage/50 text-sage"
-                  : "border-chrome/20 text-muted"
-              }`}
-            >
-              {understanding.provider === "gemini" ? understanding.model : "keywords"}
-            </span>
-          ) : null}
-          <span className="flex items-center gap-1.5">
-            <Sparkle width={13} height={13} /> agentic
-          </span>
-        </span>
+        <Sparkle width={13} height={13} className="text-muted" />
       </header>
 
       <div ref={listRef} className="thin-scroll flex-1 space-y-4 overflow-y-auto px-5 py-5">

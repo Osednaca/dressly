@@ -38,7 +38,7 @@ export function Onboarding({ busy, error, onBegin }: OnboardingProps) {
   return (
     <div className="relative z-10 mx-auto grid max-w-[1500px] gap-12 px-6 py-12 md:grid-cols-[1.05fr_0.95fr] md:px-10 md:py-20 lg:gap-24">
       <section className="animate-rise flex flex-col justify-center">
-        <p className="overline mb-6 text-accent-soft">YouCam · Gemini</p>
+        <p className="overline mb-6 text-accent-soft">Your AI personal stylist</p>
         <h1 className="text-[clamp(2.8rem,6.4vw,5rem)] leading-[0.96] text-text-primary">
           Don&rsquo;t browse
           <br />
@@ -54,7 +54,7 @@ export function Onboarding({ busy, error, onBegin }: OnboardingProps) {
           {[
             ["35", "curated pieces"],
             ["Real", "virtual try-on"],
-            ["Live", "agent decisions"],
+            ["Live", "voice stylist"],
           ].map(([value, label]) => (
             <div key={label}>
               <dt style={{ fontFamily: "var(--font-display)" }} className="text-3xl text-text-primary">
@@ -170,7 +170,7 @@ export function Onboarding({ busy, error, onBegin }: OnboardingProps) {
             {!busy ? <Camera width={17} height={17} /> : null}
           </button>
           <p className="mt-3 text-center text-[11px] text-muted">
-            Your photo is used only for virtual try-on. It is never sent to the language model.
+            Your photo is used only for your virtual try-on.
           </p>
         </DresslyGlass>
       </section>

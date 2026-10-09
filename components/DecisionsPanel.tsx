@@ -3,29 +3,7 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { ChevronDown } from "@/components/icons";
-import type { DecisionRecord, ScoredAlternative } from "@/lib/types";
-
-function Bars({ items, max = 4 }: { items: ScoredAlternative[]; max?: number }) {
-  if (items.length === 0) return <p className="text-[12px] text-muted">—</p>;
-  return (
-    <ul className="space-y-1.5">
-      {items.slice(0, max).map((item) => (
-        <li key={item.label} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
-          <span className="relative block h-[3px] w-full overflow-hidden rounded-full bg-white/10">
-            <span
-              className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-champagne to-accent-soft"
-              style={{ width: `${Math.max(2, Math.round(item.probability * 100))}%` }}
-            />
-          </span>
-          <span className="flex items-baseline gap-2 whitespace-nowrap text-[12px]">
-            <span className="text-ink-soft">{item.label}</span>
-            <span className="tabular-nums text-muted">{item.probability.toFixed(2)}</span>
-          </span>
-        </li>
-      ))}
-    </ul>
-  );
-}
+import type { DecisionRecord } from "@/lib/types";
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -36,12 +14,18 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function actionLabel(decision: string | undefined): string {
+  if (!decision) return "—";
+  const words = decision.toLowerCase().replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 /**
- * Agent Decisions panel.
+ * Stylist notes.
  *
- * Structured material only: the alternatives the agent considered and the scores it
- * assigned. Never raw chain-of-thought. The decision engine itself is not named in
- * the shopper-facing UI; its provenance stays on the DecisionRecord.
+ * What the stylist understood, what it is doing next and why — in plain language.
+ * Scores, distributions and engine provenance stay on the DecisionRecord and out of
+ * the shopper-facing UI.
  */
 export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
   const [open, setOpen] = useState(true);
@@ -55,25 +39,23 @@ export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
         className="flex w-full items-center justify-between px-5 py-3"
         aria-expanded={open}
       >
-        <span className="overline text-muted">Agent decisions</span>
-        <span className="flex items-center gap-2 text-[11px] text-muted">
-          <ChevronDown
-            width={16}
-            height={16}
-            className={`transition-transform ${open ? "" : "-rotate-90"}`}
-          />
-        </span>
+        <span className="overline text-muted">Stylist notes</span>
+        <ChevronDown
+          width={16}
+          height={16}
+          className={`text-muted transition-transform ${open ? "" : "-rotate-90"}`}
+        />
       </button>
 
       {open ? (
         <div className="border-t border-chrome/10 px-5 py-4">
           {!latest ? (
             <p className="text-[13px] text-muted">
-              No decisions yet. Send the first message to see the agent evaluate alternatives.
+              Nothing yet. Tell Dressly where you&rsquo;re going and the stylist will explain each choice.
             </p>
           ) : (
             <div className="animate-fade">
-              <Field label="User intent">
+              <Field label="What I understood">
                 <div className="flex flex-wrap gap-1.5">
                   {latest.intent?.interpreted.length ? (
                     latest.intent.interpreted.map((chip) => (
@@ -90,26 +72,8 @@ export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
                 </div>
               </Field>
 
-              <Field label="Style evaluation">
-                <Bars items={latest.styleDistribution} />
-              </Field>
-
-              <Field label="Current action">
-                <p className="text-[14px]">
-                  <span className="font-semibold">{latest.action?.decision.replace(/_/g, " ")}</span>
-                  {latest.action ? (
-                    <span className="ml-2 text-muted">
-                      confidence {latest.action.confidence.toFixed(2)}
-                    </span>
-                  ) : null}
-                </p>
-                <div className="mt-2">
-                  <Bars items={latest.action?.distribution ?? []} max={4} />
-                </div>
-              </Field>
-
-              <Field label="Product evaluation">
-                <Bars items={latest.productEvaluation} max={5} />
+              <Field label="Next step">
+                <p className="text-[14px] font-semibold">{actionLabel(latest.action?.decision)}</p>
               </Field>
 
               <Field label="Selected">
@@ -125,7 +89,7 @@ export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
           {decisions.length > 1 ? (
             <details className="mt-4 border-t border-chrome/10 pt-3">
               <summary className="overline cursor-pointer text-muted">
-                Earlier iterations ({decisions.length - 1})
+                Earlier steps ({decisions.length - 1})
               </summary>
               <ul className="mt-3 space-y-2">
                 {decisions
@@ -135,7 +99,7 @@ export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
                     <li key={record.id} className="flex items-baseline justify-between text-[12px]">
                       <span className="text-muted">#{record.iteration}</span>
                       <span className="text-ink-soft">
-                        {record.action?.decision.replace(/_/g, " ")}
+                        {actionLabel(record.action?.decision)}
                         {record.selectedProductName ? ` · ${record.selectedProductName}` : ""}
                       </span>
                     </li>

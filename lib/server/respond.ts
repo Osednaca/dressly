@@ -16,7 +16,11 @@ export function notFound(message = "Not found"): NextResponse {
   return NextResponse.json({ error: message }, { status: 404 });
 }
 
+/** The real cause is logged server-side; the shopper only ever sees a plain message. */
 export function serverError(error: unknown): NextResponse {
-  const message = error instanceof Error ? error.message : "Unexpected server error";
-  return NextResponse.json({ error: message }, { status: 500 });
+  console.error("[dressly] request failed:", error);
+  return NextResponse.json(
+    { error: "Something went wrong on our side. Please try again." },
+    { status: 500 },
+  );
 }

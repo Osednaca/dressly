@@ -30,6 +30,9 @@ export interface StartRunwayResult {
   blocked: BlockedView | null;
 }
 
+/** Shopper-facing copy; provider detail is logged, never shown. */
+const ANIMATION_FAILED_MESSAGE = "We couldn't animate this look. Please try again.";
+
 export async function startRunway(
   session: StylingSession,
   lookId: string,
@@ -39,7 +42,7 @@ export async function startRunway(
       job: null,
       blocked: {
         code: "RUNWAY_DISABLED",
-        message: "Animation is disabled. Set RUNWAY_ENABLED=true and RUNWAY_API_KEY to use it.",
+        message: "Animation isn't available right now.",
         retryable: false,
       },
     };
@@ -86,17 +89,13 @@ export async function startRunway(
     });
     return { job, blocked: null };
   } catch (error) {
+    console.error("[dressly] animation could not start:", error);
     return {
       job: null,
       blocked: {
         code: "RUNWAY_FAILED",
-        message:
-          error instanceof ProviderError
-            ? error.message
-            : error instanceof Error
-              ? error.message
-              : "Runway could not start.",
-        retryable: true,
+        message: ANIMATION_FAILED_MESSAGE,
+        retryable: error instanceof ProviderError ? error.retryable : true,
       },
     };
   }
@@ -118,7 +117,8 @@ export async function pollRunway(jobId: string): Promise<PollRunwayResult | null
     const state = await runwayEngineOrThrow().poll(job.handle as { id: string; provider: "runway" });
     if (state.status === "pending") return { job: jobView(getJob(job.id) ?? job) };
     if (state.status === "failed") {
-      failJob(job.id, state.message, state.retryable);
+      console.error(`[dressly] animation ${job.id} failed:`, state.message);
+      failJob(job.id, ANIMATION_FAILED_MESSAGE, state.retryable);
       return { job: jobView(getJob(job.id) ?? job) };
     }
 
@@ -132,7 +132,8 @@ export async function pollRunway(jobId: string): Promise<PollRunwayResult | null
     updateJob(job.id, { status: "success" });
     return { job: jobView(getJob(job.id) ?? job), session: session ?? undefined };
   } catch (error) {
-    failJob(job.id, error instanceof Error ? error.message : "animation poll failed", true);
+    console.error(`[dressly] animation ${job.id} poll failed:`, error);
+    failJob(job.id, ANIMATION_FAILED_MESSAGE, true);
     return { job: jobView(getJob(job.id) ?? job) };
   }
 }

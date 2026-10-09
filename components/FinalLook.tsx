@@ -151,7 +151,7 @@ export function FinalLook({
               {[
                 [metrics.compatibleProducts, "compatible pieces"],
                 [metrics.looksGenerated, "virtual try-ons"],
-                [metrics.agentIterations, "agent decisions"],
+                [metrics.agentIterations, "styling rounds"],
               ].map(([value, label]) => (
                 <div key={label}>
                   <dt style={{ fontFamily: "var(--font-display)" }} className="text-3xl">

@@ -22,7 +22,7 @@ export async function POST(_request: Request, context: Context) {
 
     if (env.mockExternalApis || !isGeminiConfigured()) {
       return json(
-        { error: "Live voice needs GEMINI_API_KEY (and mock mode off). You can type instead." },
+        { error: "Voice chat isn't available right now. You can type instead." },
         503,
       );
     }

@@ -55,10 +55,7 @@ export function FittingRoom({
         <p className="overline text-muted">Fitting room</p>
         <span className="text-[11px] text-muted">
           {activeLook ? activeLook.label : "Original photo"}
-          {" · "}
-          <span className={mock ? "text-accent" : "text-sage"}>
-            {mock ? "Simulated" : "YouCam"}
-          </span>
+          {mock ? <span className="text-accent"> · Simulated</span> : null}
         </span>
       </div>
 
@@ -81,8 +78,7 @@ export function FittingRoom({
                 </span>
                 <LoadingSteps steps={TRYON_STEPS} active={stepIndex} />
                 <p className="text-[12px] text-white/50">
-                  Dressly is applying {job?.provider === "mock" ? "a simulated" : "a real"} garment
-                  to your photo.
+                  Dressly is fitting the garment to your photo.
                 </p>
               </div>
             </div>

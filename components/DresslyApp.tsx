@@ -36,7 +36,6 @@ export function DresslyApp() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [job, setJob] = useState<JobView | null>(null);
   const [blocked, setBlocked] = useState<BlockedView | null>(null);
-  const [understanding, setUnderstanding] = useState<ChatResponse["understanding"] | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -116,7 +115,6 @@ export function DresslyApp() {
         const response: ChatResponse = await api.chat(sessionId, message);
         applyPayload(response);
         setBlocked(response.blocked);
-        setUnderstanding(response.understanding);
         if (response.job) await pollJob(response.job);
       } catch (sendError) {
         setError(sendError instanceof Error ? sendError.message : "Something went wrong.");
@@ -178,7 +176,6 @@ export function DresslyApp() {
         const response = await api.chat(sessionId, message.slice(0, 600));
         applyPayload(response);
         setBlocked(response.blocked);
-        setUnderstanding(response.understanding);
         if (response.job) {
           void pollJob(response.job).then((final) => {
             if (!final) return;
@@ -258,7 +255,7 @@ export function DresslyApp() {
         if (polled.job.status === "failed") {
           setAnimationBlocked({
             code: "RUNWAY_FAILED",
-            message: polled.job.message ?? "Runway could not finish the animation.",
+            message: polled.job.message ?? "The animation could not be finished.",
             retryable: polled.job.retryable ?? true,
           });
           return;
@@ -285,7 +282,6 @@ export function DresslyApp() {
     setFinalDismissed(false);
     setAnimationJob(null);
     setAnimationBlocked(null);
-    setUnderstanding(null);
     window.scrollTo({ top: 0 });
   }, []);
 
@@ -324,7 +320,6 @@ export function DresslyApp() {
               suggestions={suggestions}
               busy={working}
               onSend={onSend}
-              understanding={understanding}
               live={{
                 status: live.status,
                 error: live.error,

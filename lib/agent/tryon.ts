@@ -34,15 +34,15 @@ async function readPublicAsset(imagePath: string): Promise<{ bytes: Buffer; cont
   return { bytes, contentType: contentTypeFor(relative) };
 }
 
+/** Shopper-facing copy; provider detail is logged, never shown. */
+const TRYON_FAILED_MESSAGE = "We couldn't finish this try-on. Please try again.";
+
 function blockedFromError(error: unknown): BlockedView {
+  console.error("[dressly] try-on could not start:", error);
   if (error instanceof ProviderError) {
-    return { code: "YOUCAM_UNAVAILABLE", message: error.message, retryable: error.retryable };
+    return { code: "YOUCAM_UNAVAILABLE", message: TRYON_FAILED_MESSAGE, retryable: error.retryable };
   }
-  return {
-    code: "TRYON_FAILED",
-    message: error instanceof Error ? error.message : "The try-on could not be started.",
-    retryable: true,
-  };
+  return { code: "TRYON_FAILED", message: TRYON_FAILED_MESSAGE, retryable: true };
 }
 
 export async function startTryOn(
@@ -182,13 +182,15 @@ export async function pollTryOn(jobId: string): Promise<PollTryOnResult | null> 
       return { job: jobView(refreshed) };
     }
     if (state.status === "failed") {
-      failJob(job.id, state.message, state.retryable);
+      console.error(`[dressly] try-on ${job.id} failed:`, state.message);
+      failJob(job.id, TRYON_FAILED_MESSAGE, state.retryable);
       const refreshed = getJob(job.id) ?? job;
       return { job: jobView(refreshed) };
     }
     return await commitLook(job, state as TryOnState & { status: "success" });
   } catch (error) {
-    failJob(job.id, error instanceof Error ? error.message : "poll failed", true);
+    console.error(`[dressly] try-on ${job.id} poll failed:`, error);
+    failJob(job.id, TRYON_FAILED_MESSAGE, true);
     const refreshed = getJob(job.id) ?? job;
     return { job: jobView(refreshed) };
   }
