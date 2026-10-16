@@ -1,5 +1,12 @@
-import type { AgentAction, ScoredAlternative, StyleTag } from "@/lib/types";
-import type { JevResult, JevRequest } from "@/services/jev/client";
+import type { AgentAction, ConsultationAction, ScoredAlternative, StyleTag } from "@/lib/types";
+import {
+  buildConsultationReason,
+  type JevConsultationRequest,
+  type JevConsultationResult,
+  type JevConsultationSignals,
+  type JevRequest,
+  type JevResult,
+} from "@/services/jev/client";
 
 /**
  * Deterministic stand-in for JEV.
@@ -75,6 +82,30 @@ export function evaluateDeterministic(request: JevRequest, signals: DecisionSign
             { label: "smart_casual", probability: 1 },
             { label: "casual", probability: 0 },
           ],
+    model: "deterministic-fallback",
+  };
+}
+
+export function evaluateConsultationDeterministic(
+  request: JevConsultationRequest,
+  signals: JevConsultationSignals,
+): JevConsultationResult {
+  const probabilities = softmax(signals.actionScores, 0.12);
+  const actionDistribution = distribution(probabilities);
+  const topChoice = (actionDistribution[0]?.label as ConsultationAction | undefined) ?? "IGNORE";
+  const topProbability = actionDistribution[0]?.probability ?? 0.9;
+
+  return {
+    decision: topChoice,
+    confidence: Math.max(topProbability, Math.min(1, request.extraction.confidence)),
+    distribution:
+      actionDistribution.length >= 2
+        ? actionDistribution
+        : [
+            { label: topChoice, probability: 1 },
+            { label: topChoice === "IGNORE" ? "PROPOSE_CHANGE" : "IGNORE", probability: 0 },
+          ],
+    reason: buildConsultationReason(topChoice, request),
     model: "deterministic-fallback",
   };
 }

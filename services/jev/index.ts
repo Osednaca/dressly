@@ -1,6 +1,21 @@
 import { env } from "@/lib/env";
-import { evaluateDeterministic, type DecisionSignals } from "@/services/jev/fallback";
-import { evaluateWithJev, isJevConfigured, type JevRequest, type JevResult } from "@/services/jev/client";
+import {
+  evaluateConsultationDeterministic,
+  evaluateDeterministic,
+  type DecisionSignals,
+} from "@/services/jev/fallback";
+import {
+  buildConsultationJevSignals,
+  evaluateConsultationWithJev,
+  evaluateWithJev,
+  isJevConfigured,
+  type JevConsultationAlternative,
+  type JevConsultationRequest,
+  type JevConsultationResult,
+  type JevConsultationSignals,
+  type JevRequest,
+  type JevResult,
+} from "@/services/jev/client";
 
 /**
  * The single JEV policy decision.
@@ -47,5 +62,57 @@ export async function decide(request: JevRequest, signals: DecisionSignals): Pro
   }
 }
 
-export { evaluateDeterministic, isJevConfigured };
-export type { DecisionSignals, JevRequest, JevResult };
+export interface JevConsultationOutcome {
+  result: JevConsultationResult;
+  provider: "jev" | "fallback";
+  note: string;
+}
+
+export async function decideConsultation(
+  request: JevConsultationRequest,
+  signals: JevConsultationSignals,
+): Promise<JevConsultationOutcome> {
+  if (env.mockExternalApis) {
+    return {
+      result: evaluateConsultationDeterministic(request, signals),
+      provider: "fallback",
+      note: "Mock mode: consultation decision computed deterministically, not by JEV.",
+    };
+  }
+
+  if (!isJevConfigured()) {
+    return {
+      result: evaluateConsultationDeterministic(request, signals),
+      provider: "fallback",
+      note: "TYPESAFE_API_KEY is not set: consultation decision computed deterministically.",
+    };
+  }
+
+  try {
+    const result = await evaluateConsultationWithJev(request);
+    return { result, provider: "jev", note: "" };
+  } catch (error) {
+    return {
+      result: evaluateConsultationDeterministic(request, signals),
+      provider: "fallback",
+      note: `JEV unavailable (${error instanceof Error ? error.message : "unknown error"}): consultation decision computed deterministically.`,
+    };
+  }
+}
+
+export {
+  buildConsultationJevSignals,
+  evaluateConsultationDeterministic,
+  evaluateConsultationWithJev,
+  evaluateDeterministic,
+  isJevConfigured,
+};
+export type {
+  DecisionSignals,
+  JevConsultationAlternative,
+  JevConsultationRequest,
+  JevConsultationResult,
+  JevConsultationSignals,
+  JevRequest,
+  JevResult,
+};

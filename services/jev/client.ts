@@ -1,7 +1,16 @@
 import { choice, TypeSafeClient } from "@typesafe-ai/sdk";
+import type { CandidateConsultationExtraction } from "@/lib/api-types";
 import { env } from "@/lib/env";
-import type { AgentAction, ScoredAlternative, StyleTag } from "@/lib/types";
-import { STYLE_TAGS } from "@/lib/types";
+import type {
+  AgentAction,
+  BagDesignState,
+  ConsultationAction,
+  DesignFieldDiff,
+  LiveConsultationSession,
+  ScoredAlternative,
+  StyleTag,
+} from "@/lib/types";
+import { CONSULTATION_ACTIONS, STYLE_TAGS } from "@/lib/types";
 
 /**
  * JEV (TypeSafe System One) as the decision engine.
@@ -203,3 +212,217 @@ const STYLE_FORMALITY: Record<StyleTag, number> = {
   business: 0.76,
   formal: 0.95,
 };
+
+/**
+ * Live Consultation JEV evaluation contracts and SystemOne evaluator.
+ */
+
+export interface JevConsultationAlternative {
+  action: ConsultationAction;
+  description: string;
+  priorScore: number;
+}
+
+export interface JevConsultationRequest {
+  transcriptExcerpt: string;
+  extraction: CandidateConsultationExtraction;
+  diffs: DesignFieldDiff[];
+  designState: BagDesignState;
+  versionCount: number;
+  hasUserPhoto: boolean;
+  alternatives: JevConsultationAlternative[];
+}
+
+export interface JevConsultationSignals {
+  actionScores: Record<ConsultationAction, number>;
+}
+
+export interface JevConsultationResult {
+  decision: ConsultationAction;
+  confidence: number;
+  distribution: ScoredAlternative[];
+  reason: string;
+  model: string;
+}
+
+const CONSULTATION_ACTION_DESCRIPTIONS: Record<ConsultationAction, string> = {
+  IGNORE:
+    "Ignore casual small talk, meeting audio/video checks, retracted thoughts, or redundant edits already reflected in the active BagDesignState.",
+  PROPOSE_CHANGE:
+    "Propose a structured human-in-the-loop modification card for one or more BagDesignState attributes.",
+  ASK_CLARIFICATION:
+    "Ask the designer and customer to clarify a vague preference before proposing a modification.",
+  TRY_ON_CURRENT_DESIGN:
+    "Trigger YouCam Virtual Try-On so the customer can see the active handbag design on themselves.",
+  RETURN_TO_PREVIOUS_VERSION:
+    "Restore an earlier DesignVersion as the active canonical state and Runway reference.",
+  FINALIZE_DESIGN:
+    "Mark the current DesignVersion as finalized by the designer and customer.",
+};
+
+export function buildConsultationJevSignals(
+  extraction: CandidateConsultationExtraction,
+  diffs: DesignFieldDiff[],
+  consultation: LiveConsultationSession,
+  options?: { utterance?: string; hasUserPhoto?: boolean },
+): { request: JevConsultationRequest; signals: JevConsultationSignals } {
+  const actionScores: Record<ConsultationAction, number> = {
+    IGNORE: 0.08,
+    PROPOSE_CHANGE: 0.08,
+    ASK_CLARIFICATION: 0.08,
+    TRY_ON_CURRENT_DESIGN: 0.08,
+    RETURN_TO_PREVIOUS_VERSION: 0.08,
+    FINALIZE_DESIGN: 0.08,
+  };
+
+  if (
+    !extraction.isRelevantFashionSpeech ||
+    extraction.speechKind === "small_talk" ||
+    extraction.speechKind === "small_talk_or_technical" ||
+    extraction.speechKind === "cancel_or_nevermind" ||
+    extraction.speechKind === "other"
+  ) {
+    actionScores.IGNORE = 0.96;
+  } else if (extraction.speechKind === "try_on_request") {
+    actionScores.TRY_ON_CURRENT_DESIGN = 0.95;
+  } else if (
+    extraction.speechKind === "revert_version" ||
+    extraction.speechKind === "version_revert"
+  ) {
+    actionScores.RETURN_TO_PREVIOUS_VERSION = 0.94;
+  } else if (
+    extraction.speechKind === "finalize_request" ||
+    extraction.speechKind === "finalize_design"
+  ) {
+    actionScores.FINALIZE_DESIGN = 0.94;
+  } else if (extraction.speechKind === "vague_preference") {
+    actionScores.ASK_CLARIFICATION = 0.9;
+  } else if (extraction.speechKind === "design_modification") {
+    if (diffs.length > 0) {
+      actionScores.PROPOSE_CHANGE = Math.max(0.88, extraction.confidence);
+    } else {
+      actionScores.IGNORE = 0.92;
+    }
+  }
+
+  const alternatives: JevConsultationAlternative[] = CONSULTATION_ACTIONS.map((action) => ({
+    action,
+    description: CONSULTATION_ACTION_DESCRIPTIONS[action],
+    priorScore: actionScores[action],
+  }));
+
+  const request: JevConsultationRequest = {
+    transcriptExcerpt: options?.utterance ?? extraction.summary,
+    extraction,
+    diffs,
+    designState: consultation.designState,
+    versionCount: consultation.versions.length,
+    hasUserPhoto: options?.hasUserPhoto ?? false,
+    alternatives,
+  };
+
+  return {
+    request,
+    signals: { actionScores },
+  };
+}
+
+export function buildConsultationReason(
+  decision: ConsultationAction,
+  request: JevConsultationRequest,
+): string {
+  switch (decision) {
+    case "PROPOSE_CHANGE": {
+      const summary = request.diffs
+        .map((d) => `${d.label}: ${d.previousValue ?? "—"} → ${d.proposedValue}`)
+        .join(", ");
+      return summary
+        ? `Proposing handbag modification (${summary}).`
+        : request.extraction.summary || "Proposing handbag design modification.";
+    }
+    case "TRY_ON_CURRENT_DESIGN":
+      return "Customer asked to visualize the current handbag design via Virtual Try-On.";
+    case "RETURN_TO_PREVIOUS_VERSION":
+      return request.extraction.targetVersionNumber
+        ? `Restoring requested design version V${request.extraction.targetVersionNumber}.`
+        : "Restoring previous handbag design version.";
+    case "FINALIZE_DESIGN":
+      return "Customer and designer confirmed the bespoke handbag design is finalized.";
+    case "ASK_CLARIFICATION":
+      return (
+        request.extraction.clarificationQuestion ??
+        "Requesting clarification on which attribute to adjust next."
+      );
+    case "IGNORE":
+    default:
+      return "Ignored non-actionable meeting speech or redundant attribute values.";
+  }
+}
+
+export async function evaluateConsultationWithJev(
+  request: JevConsultationRequest,
+): Promise<JevConsultationResult> {
+  const criteria = Object.fromEntries(
+    request.alternatives.map((alt) => [
+      alt.action,
+      {
+        description: alt.description,
+        priorScore: alt.priorScore,
+      },
+    ]),
+  );
+
+  const result = (await client().systemOne({
+    state: {
+      mode: "live_consultation",
+      transcriptExcerpt: request.transcriptExcerpt,
+      speechKind: request.extraction.speechKind,
+      isRelevantFashionSpeech: request.extraction.isRelevantFashionSpeech,
+      extractionConfidence: request.extraction.confidence,
+      proposedDiffs: request.diffs.map((d) => ({
+        field: d.field,
+        previousValue: d.previousValue ?? null,
+        proposedValue: d.proposedValue,
+      })),
+      currentDesignState: {
+        name: request.designState.name,
+        silhouette: request.designState.silhouette,
+        size: request.designState.size,
+        primaryColor: request.designState.primaryColor,
+        material: request.designState.material,
+        texture: request.designState.texture,
+        hardwareColor: request.designState.hardwareColor,
+        hardwareStyle: request.designState.hardwareStyle,
+        strapType: request.designState.strapType,
+        strapLength: request.designState.strapLength,
+        closure: request.designState.closure,
+      },
+      versionCount: request.versionCount,
+      hasUserPhoto: request.hasUserPhoto,
+    },
+    questions: {
+      consultation_action: choice(
+        "Given the live fashion consultation utterance and extracted design attributes, which action should Dressly take right now?",
+        criteria,
+      ),
+    },
+  } as never)) as unknown as RawResult;
+
+  const answer = result.answers?.consultation_action;
+  const chosen = answer?.choice as ConsultationAction | undefined;
+  if (!chosen || !CONSULTATION_ACTIONS.includes(chosen)) {
+    throw new Error(
+      `JEV chose a consultation action outside CONSULTATION_ACTIONS: ${String(answer?.choice)}`,
+    );
+  }
+
+  const distribution = requireDistribution(toDistribution(answer?.probabilities));
+
+  return {
+    decision: chosen,
+    confidence: clamp01(answer?.confidence ?? distribution[0]?.probability ?? 0),
+    distribution,
+    reason: buildConsultationReason(chosen, request),
+    model: result.model ?? env.jevModel,
+  };
+}

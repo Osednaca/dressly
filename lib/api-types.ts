@@ -132,9 +132,13 @@ export interface CandidateConsultationExtraction {
     | "design_modification"
     | "try_on_request"
     | "version_revert"
+    | "revert_version"
     | "finalize_design"
+    | "finalize_request"
     | "vague_preference"
     | "small_talk"
+    | "small_talk_or_technical"
+    | "cancel_or_nevermind"
     | "other";
   confidence: number;
   changes: Array<{

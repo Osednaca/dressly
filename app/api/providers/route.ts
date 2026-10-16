@@ -15,5 +15,6 @@ export async function GET() {
     degraded: isDegraded(),
     mock: env.mockExternalApis,
     demo: env.demoMode,
+    consultationDemo: env.consultationDemoMode,
   });
 }
