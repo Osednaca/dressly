@@ -14,7 +14,7 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 
 ## Scope & Constraints
 
-- **Authorized Scope:**Currently executing **Phase 1** (Domain State, AI Decision Engine with Gemini + JEV, SSE & REST API routes, Human-in-the-Loop Editorial UI, and Phase 1 unit tests). Phases 2–4 remain tracked for subsequent execution.
+- **Authorized Scope:** Phase 1 complete; currently executing **Phase 2** (Iterative Design Generation with Runway `nano_banana_2.1` + YouCam Virtual Try-On Loop). Phases 3–4 remain tracked for subsequent execution.
 - **Constraints:**
   - Preserve existing AI Stylist functionality and Midnight Atelier visual identity (`#0b0a09`, Didot/Optima, `.glass`, `shaders/react`).
   - Do not duplicate Gemini, JEV, Runway, or YouCam clients; extend existing services cleanly.
@@ -36,8 +36,10 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
   - Route: `delegated` (writer trigger: touches 8+ UI/client files). Commit: `0399027` (`npm run typecheck` clean; `npm test` 47/47; `npm run build` clean). RDD: `disabled/unmanaged`.
 
 ### Phase 2 — Iterative Design Generation (`nano_banana_2.1`) & YouCam Virtual Try-On Loop
-- [ ] **C2.1** Programmatic drift-controlled prompt builder (`lib/agent/consultation-prompt.ts`), Runway `POST /v1/text_to_image` (`nano_banana_2.1`) client extension (`services/runway/*`, `lib/agent/consultation-runway.ts`), YouCam `POST /s2s/v2.0/task/bag` extension (`services/youcam/*`, `lib/agent/consultation-tryon.ts`), job polling routes (`app/api/jobs/[id]/**`), and Phase 2 tests.
-  - Route: `delegated` (pending Phase 2 authorization).
+- [x] **C2.1** Programmatic drift-controlled prompt builder (`lib/agent/consultation-prompt.ts`), Runway `POST /v1/text_to_image` (`nano_banana_2.1`) client extension (`services/runway/contract.ts`, `services/runway/client.ts`, `services/runway/index.ts`), async design job orchestrator (`lib/agent/consultation-runway.ts`, `lib/agent/jobs.ts`), and unit tests (`tests/consultation-prompt.test.ts`).
+  - Route: `delegated` (writer trigger: touches 6+ files). Commit: `0087f34` (`npm run typecheck` clean; `npm test` 51/51). RDD: `disabled/unmanaged`.
+- [x] **C2.2** YouCam `POST /s2s/v2.0/task/bag` extension (`services/contracts.ts`, `services/youcam/client.ts`, `services/youcam/mock.ts`), consultation VTO orchestrator (`lib/agent/consultation-tryon.ts`), job polling & retry routes (`app/api/sessions/[id]/consultation/tryon/route.ts`, `app/api/jobs/[id]/route.ts`, `app/api/jobs/[id]/retry/route.ts`), orchestrator & UI wiring (`lib/agent/consultation-orchestrator.ts`, `components/DresslyApp.tsx`), and end-to-end Phase 2 tests (`tests/consultation-orchestrator.test.ts`).
+  - Route: `delegated` (writer trigger: touches 8+ files). Commit: `104b176` (`npm run typecheck` clean; `npm test` 53/53; `npm run build` clean). RDD: `disabled/unmanaged`.
 
 ### Phase 3 — Isolated Playwright Meeting Bot Worker & Replaceable Audio Capture Pipeline
 - [ ] **C3.1** Replaceable `ConsultationAudioSource` + `ChromeMeetAudioSource` (`services/meeting-bot/audio-source.ts`, `audio-capture.ts`), Playwright + Chromium bot controller (`playwright-bot.ts`), Gemini Live 16kHz PCM stream (`gemini-stream.ts`), standalone HTTP worker (`worker.ts`), and Next.js bot client (`client.ts`).
@@ -62,4 +64,6 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 - **C1.1** completed in commit `ed1a17b` (`npm run typecheck` 0 errors, `npm test` 41/41 passing, `public/catalog/consultation-bag-v1.png` generated). RDD: `disabled/unmanaged`.
 - **C1.2** completed in commit `115f2ad` (`npm run typecheck` 0 errors, `npm test` 47/47 passing). RDD: `disabled/unmanaged`.
 - **C1.3** completed in commit `0399027` (`npm run typecheck` 0 errors, `npm test` 47/47 passing, `npm run build` clean). RDD: `disabled/unmanaged`.
-- **Phase 1 Status:** Complete. Next step: Await user authorization to begin **Phase 2 (C2.1)**.
+- **C2.1** completed in commit `0087f34` (`npm run typecheck` 0 errors, `npm test` 51/51 passing). RDD: `disabled/unmanaged`.
+- **C2.2** completed in commit `104b176` (`npm run typecheck` 0 errors, `npm test` 53/53 passing, `npm run build` clean). RDD: `disabled/unmanaged`.
+- **Phase 2 Status:** Complete. Next step: Await user authorization to begin **Phase 3 (C3.1)**.
