@@ -1,4 +1,3 @@
-import sharp from "sharp";
 import {
   clearConsultationDebounce,
   computeChangeFingerprint,
@@ -7,17 +6,20 @@ import {
   isDuplicateTranscript,
   pruneRedundantChanges,
 } from "@/lib/agent/consultation-aggregator";
+import {
+  pollConsultationDesign,
+  startConsultationDesign,
+} from "@/lib/agent/consultation-runway";
+import { startConsultationTryOn } from "@/lib/agent/consultation-tryon";
 import type {
   ConsultationResponse,
   IngestTranscriptRequest,
-  JobView,
   StartConsultationRequest,
   SuggestionActionRequest,
   SuggestionActionResponse,
   TranscriptTurnResponse,
   UpdateConsultationRequest,
 } from "@/lib/api-types";
-import { renderStudioBagSvg } from "@/lib/catalog/bag-svg";
 import { env } from "@/lib/env";
 import { publishConsultationEvent } from "@/lib/server/consultation-events";
 import {
@@ -28,15 +30,12 @@ import {
   endConsultation,
   initConsultation,
   recordDecision,
-  recordDesignVersion,
   restoreDesignVersion,
   setConsultationBotStatus,
   setConsultationStatus,
   updateConsultationSettings,
 } from "@/lib/session/reducer";
 import { getSession, mutateSession } from "@/lib/session/store";
-import { RESULT_DIR, writeDataFile } from "@/lib/storage/files";
-import { mediaUrl } from "@/lib/storage/media";
 import type {
   BagDesignState,
   DecisionRecord,
@@ -48,42 +47,7 @@ import type {
 import { newId, nowIso } from "@/lib/util/id";
 import { understandConsultationUtterance } from "@/services/gemini/consultation";
 import { buildConsultationJevSignals, decideConsultation } from "@/services/jev";
-
-function capitalize(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-}
-
-function summarizeChangesForLabel(changes: DesignFieldDiff[]): string {
-  if (changes.length === 0) return "Revision";
-  const first = changes[0]!;
-  switch (first.field) {
-    case "hardwareColor":
-      return `${capitalize(first.proposedValue)} hardware`;
-    case "size":
-      return `${capitalize(first.proposedValue)} silhouette`;
-    case "strapType":
-    case "strapLength":
-      return first.proposedValue.toLowerCase().includes("crossbody")
-        ? "Crossbody strap"
-        : `${capitalize(first.proposedValue)} strap`;
-    case "primaryColor":
-      return `${capitalize(first.proposedValue)} leather`;
-    case "material":
-    case "texture":
-      return `${capitalize(first.proposedValue)} finish`;
-    default:
-      return `${capitalize(first.proposedValue)} ${first.label.toLowerCase()}`;
-  }
-}
-
-function summarizeChangesForDescription(changes: DesignFieldDiff[]): string {
-  if (changes.length === 0) return "Updated bespoke bag design";
-  return changes
-    .map((c) => `${c.label.toLowerCase()}: ${c.previousValue ?? "—"} → ${c.proposedValue}`)
-    .join(", ");
-}
+import { runwayImageEngine } from "@/services/runway";
 
 export async function startSessionConsultation(
   sessionId: string,
@@ -385,6 +349,17 @@ async function processFinalUtteranceImmediate(
         };
       }
     }
+  } else if (action === "TRY_ON_CURRENT_DESIGN") {
+    const tryOnRes = await startConsultationTryOn(afterDecisionSession);
+    return {
+      session: tryOnRes.session,
+      duplicated: false,
+      extraction,
+      decision: createdDecision,
+      suggestion: null,
+      autoJob: tryOnRes.job,
+      blocked: tryOnRes.blocked,
+    };
   } else if (action !== "IGNORE") {
     publishConsultationEvent(sessionId, {
       type: "consultation.updated",
@@ -470,25 +445,6 @@ export async function ingestConsultationTranscript(
   return processFinalUtteranceImmediate(sessionId, req);
 }
 
-async function renderDesignVersionPng(
-  designState: BagDesignState,
-  versionLabel: string,
-): Promise<{ versionId: string; imageUrl: string }> {
-  const versionId = newId("ver");
-  const fileName = `design_${versionId}.png`;
-  const svg = renderStudioBagSvg(designState, { versionLabel });
-  const pngBuffer = await sharp(Buffer.from(svg, "utf8"), { density: 180 })
-    .resize(896, 1200, { fit: "cover" })
-    .png({ compressionLevel: 8 })
-    .toBuffer();
-
-  await writeDataFile(RESULT_DIR, fileName, pngBuffer);
-  return {
-    versionId,
-    imageUrl: mediaUrl("results", fileName),
-  };
-}
-
 export async function handleSuggestionAction(
   sessionId: string,
   suggestionId: string,
@@ -496,8 +452,12 @@ export async function handleSuggestionAction(
 ): Promise<SuggestionActionResponse | null> {
   let actedSuggestion: ProposedDesignChange | null = null;
   let appliedChanges: DesignFieldDiff[] = [];
+  let previousState: BagDesignState | null = null;
 
   const afterActionSession = await mutateSession(sessionId, (session) => {
+    if (session.consultation) {
+      previousState = structuredClone(session.consultation.designState);
+    }
     const res = actOnProposedSuggestion(
       session,
       suggestionId,
@@ -540,50 +500,46 @@ export async function handleSuggestionAction(
     };
   }
 
-  const updatedState = afterActionSession.consultation.designState;
-  const nextVersionNum = afterActionSession.consultation.versions.length + 1;
-  const shortLabel = summarizeChangesForLabel(appliedChanges);
-  const fullLabel = `V${nextVersionNum} ${shortLabel}`;
-  const summaryText = summarizeChangesForDescription(appliedChanges);
+  const nextState = afterActionSession.consultation.designState;
+  const prevState = previousState ?? nextState;
 
-  const rendered = await renderDesignVersionPng(updatedState, fullLabel);
-
-  let createdVersion = afterActionSession.consultation.versions[0]!;
-  const finalSession = await mutateSession(sessionId, (session) => {
-    const recorded = recordDesignVersion(session, {
-      id: rendered.versionId,
-      imageUrl: rendered.imageUrl,
-      label: shortLabel,
-      summary: summaryText,
-      sourceSuggestionId: resolvedSuggestion.id,
-      designState: updatedState,
-    });
-    createdVersion = recorded.version;
-    return recorded.session;
+  const designRes = await startConsultationDesign(afterActionSession, {
+    suggestionId: resolvedSuggestion.id,
+    changes: appliedChanges,
+    nextState,
+    previousState: prevState,
   });
 
-  if (!finalSession) return null;
+  if (!designRes.job) {
+    return {
+      session: designRes.session,
+      suggestion: resolvedSuggestion,
+      job: null,
+      blocked: designRes.blocked,
+    };
+  }
 
-  const job: JobView = {
-    id: newId("job"),
-    kind: "consultation_design",
-    status: "success",
-    provider: env.mockExternalApis || !env.runwayApiKey ? "mock" : "runway",
-    step: `${createdVersion.label} ready`,
-  };
-
-  publishConsultationEvent(sessionId, {
-    type: "design.generation.completed",
-    version: createdVersion,
-    job,
-    session: finalSession,
-  });
+  if (runwayImageEngine({ allowFallbackWhenDisabled: true }).provider === "mock") {
+    const polled = await pollConsultationDesign(
+      designRes.job.id,
+      async (sess, ver) => (await startConsultationTryOn(sess, ver.id)).job,
+    );
+    if (polled) {
+      const latestSession = await getSession(sessionId);
+      return {
+        session: latestSession ?? polled.session ?? designRes.session,
+        suggestion: resolvedSuggestion,
+        job: polled.followUpJob ?? polled.job,
+        blocked: designRes.blocked,
+      };
+    }
+  }
 
   return {
-    session: finalSession,
+    session: designRes.session,
     suggestion: resolvedSuggestion,
-    job,
-    blocked: null,
+    job: designRes.job,
+    blocked: designRes.blocked,
   };
 }
 

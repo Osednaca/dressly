@@ -1,6 +1,11 @@
 export const dynamic = "force-dynamic";
 
-import { getJob, jobView } from "@/lib/agent/jobs";
+import { pollConsultationDesign } from "@/lib/agent/consultation-runway";
+import {
+  pollConsultationTryOn,
+  startConsultationTryOn,
+} from "@/lib/agent/consultation-tryon";
+import { getJob } from "@/lib/agent/jobs";
 import { pollRunway } from "@/lib/agent/runway";
 import { pollTryOn } from "@/lib/agent/tryon";
 import { json, notFound, serverError } from "@/lib/server/respond";
@@ -28,6 +33,27 @@ export async function GET(_request: Request, context: Context) {
         session: result.session,
         suggestions: result.session ? sessionPayload(result.session).suggestions : undefined,
       });
+    }
+
+    if (job.kind === "consultation_design") {
+      const result = await pollConsultationDesign(
+        id,
+        async (sess, ver) => (await startConsultationTryOn(sess, ver.id)).job,
+      );
+      if (!result) return notFound("Job not found or expired");
+      return json({
+        job: result.job,
+        session: result.session,
+        suggestions: result.session ? sessionPayload(result.session).suggestions : undefined,
+        version: result.version,
+        followUpJob: result.followUpJob ?? null,
+      });
+    }
+
+    if (job.kind === "consultation_tryon") {
+      const result = await pollConsultationTryOn(id);
+      if (!result) return notFound("Job not found or expired");
+      return json(result);
     }
 
     const result = await pollTryOn(id);

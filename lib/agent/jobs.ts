@@ -51,6 +51,7 @@ export interface AgentJob {
   promptUsed?: string;
   versionId?: string;
   highResFinal?: boolean;
+  tryOnTaskKind?: "cloth-v4" | "bag";
 }
 
 const jobs = new Map<string, AgentJob>();

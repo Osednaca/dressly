@@ -18,6 +18,7 @@ import type { TryOnEngine, TryOnHandle, TryOnRequest, TryOnState } from "@/servi
 
 const FILE_PATH = "/s2s/v2.0/file";
 const TASK_PATH = "/s2s/v2.0/task/cloth-v4";
+const BAG_TASK_PATH = "/s2s/v2.0/task/bag";
 
 interface YouCamEnvelope<T> {
   status?: number;
@@ -171,6 +172,42 @@ export const youcamEngine: TryOnEngine = {
       uploadAsset(request.garmentImage, request.garmentContentType, `dressly-${request.garmentId}.jpg`),
     ]);
 
+    if (request.taskKind === "bag") {
+      const bagBody: Record<string, unknown> = {
+        src_file_id: srcFileId,
+        ref_file_id: refFileId,
+        gender: request.gender ?? "female",
+        style: request.bagStyle ?? "style_parisian_chic",
+      };
+
+      const created = await requestJson<unknown>(
+        `${env.youcamBaseUrl}${BAG_TASK_PATH}`,
+        {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(bagBody),
+        },
+        opts("youcam", env.youcamTimeoutMs, 1),
+      );
+
+      if (!created.ok) {
+        throw new ProviderError(
+          "youcam",
+          created.status,
+          `bag try-on task rejected: ${providerMessage(created.data, created.text.slice(0, 300))}`,
+          { retryable: created.status >= 500 || created.status === 429, body: created.text },
+        );
+      }
+
+      const data = unwrap<TaskCreateData>(created.data, "bag try-on task creation");
+      if (!data.task_id) {
+        throw new ProviderError("youcam", 502, "bag try-on task returned no task_id", {
+          retryable: true,
+        });
+      }
+      return { id: data.task_id, provider: "youcam", taskKind: "bag" };
+    }
+
     const body: Record<string, unknown> = {
       src_file_id: srcFileId,
       ref_file_id: refFileId,
@@ -207,12 +244,13 @@ export const youcamEngine: TryOnEngine = {
     if (!data.task_id) {
       throw new ProviderError("youcam", 502, "try-on task returned no task_id", { retryable: true });
     }
-    return { id: data.task_id, provider: "youcam" };
+    return { id: data.task_id, provider: "youcam", taskKind: "cloth-v4" };
   },
 
   async poll(handle: TryOnHandle): Promise<TryOnState> {
+    const taskPath = handle.taskKind === "bag" ? BAG_TASK_PATH : TASK_PATH;
     const response = await requestJson<unknown>(
-      `${env.youcamBaseUrl}${TASK_PATH}/${encodeURIComponent(handle.id)}`,
+      `${env.youcamBaseUrl}${taskPath}/${encodeURIComponent(handle.id)}`,
       { method: "GET", headers: authHeaders() },
       opts("youcam", env.youcamTimeoutMs, 1),
     );

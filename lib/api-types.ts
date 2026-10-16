@@ -80,6 +80,8 @@ export interface JobPollResponse {
   look?: Look;
   /** Present when a consultation design generation succeeded and produced a new version. */
   version?: DesignVersion;
+  /** Present when completing a consultation design job automatically starts a follow-up VTO job. */
+  followUpJob?: JobView | null;
 }
 
 export interface ProvidersResponse {

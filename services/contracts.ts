@@ -22,11 +22,18 @@ export interface TryOnRequest {
   garmentId: string;
   /** Display name, used only by the development mock's caption. */
   garmentName: string;
+  /** YouCam S2S v2.0 task endpoint discriminator (`cloth-v4` default, or `bag`). */
+  taskKind?: "cloth-v4" | "bag";
+  /** Target gender hint used by `/s2s/v2.0/task/bag`. */
+  gender?: "female" | "male";
+  /** Style preset used by `/s2s/v2.0/task/bag`. */
+  bagStyle?: string;
 }
 
 export interface TryOnHandle {
   id: string;
   provider: "youcam" | "mock";
+  taskKind?: "cloth-v4" | "bag";
 }
 
 export type TryOnState =

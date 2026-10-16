@@ -86,25 +86,50 @@ export function DresslyApp() {
   }, []);
 
   /** Polls a job to completion; resolves with the final job, or null if superseded. */
-  const pollJob = useCallback(async (initial: JobView): Promise<JobView | null> => {
+  const pollJob = useCallback(async (initialOrId: JobView | string): Promise<JobView | null> => {
     const token = ++pollToken.current;
-    setJob(initial);
+    const targetId = typeof initialOrId === "string" ? initialOrId : initialOrId.id;
+    let latestJob: JobView =
+      typeof initialOrId === "string"
+        ? {
+            id: targetId,
+            kind: "consultation_tryon",
+            status: "pending",
+            provider: "youcam",
+          }
+        : initialOrId;
+    if (typeof initialOrId !== "string") {
+      setJob(initialOrId);
+    }
     for (let index = 0; index < MAX_POLLS; index += 1) {
       await delay(POLL_INTERVAL_MS);
       if (pollToken.current !== token) return null;
       try {
-        const result = await api.pollJob(initial.id);
+        const result = await api.pollJob(targetId);
         if (pollToken.current !== token) return null;
+        latestJob = result.job;
         setJob(result.job);
         if (result.session) {
           setSession(result.session);
           if (result.suggestions) setSuggestions(result.suggestions);
         }
-        if (result.job.status !== "pending") return result.job;
+        if (result.version) {
+          setSelectedVersionId(result.version.id);
+        }
+        if (result.job.status !== "pending") {
+          if (result.followUpJob) {
+            setJob(result.followUpJob);
+            if (result.followUpJob.status === "pending") {
+              return await pollJob(result.followUpJob.id);
+            }
+            return result.followUpJob;
+          }
+          return result.job;
+        }
       } catch (pollError) {
         if (pollToken.current !== token) return null;
         const failed: JobView = {
-          ...initial,
+          ...latestJob,
           status: "failed",
           message: pollError instanceof Error ? pollError.message : "Lost contact with the server.",
           retryable: true,
@@ -115,7 +140,7 @@ export function DresslyApp() {
     }
     if (pollToken.current !== token) return null;
     const timedOut: JobView = {
-      ...initial,
+      ...latestJob,
       status: "failed",
       message: "This try-on is taking too long. Try again or choose another piece.",
       retryable: true,
@@ -393,12 +418,15 @@ export function DresslyApp() {
           immediate: true,
         });
         setSession(res.session);
-        setBlocked(res.blocked);
+        if (res.blocked) setBlocked(res.blocked);
         if (res.session.consultation?.currentDesignVersionId) {
           setSelectedVersionId(res.session.consultation.currentDesignVersionId);
         }
-        if (res.autoJob && res.autoJob.status === "pending") {
-          await pollJob(res.autoJob);
+        if (res.autoJob) {
+          setJob(res.autoJob);
+          if (res.autoJob.status === "pending") {
+            void pollJob(res.autoJob.id);
+          }
         }
       } catch (transcriptErr) {
         setError(
@@ -427,12 +455,15 @@ export function DresslyApp() {
           editedChanges,
         });
         setSession(res.session);
-        setBlocked(res.blocked);
+        if (res.blocked) setBlocked(res.blocked);
         if (res.session.consultation?.currentDesignVersionId) {
           setSelectedVersionId(res.session.consultation.currentDesignVersionId);
         }
-        if (res.job && res.job.status === "pending") {
-          await pollJob(res.job);
+        if (res.job) {
+          setJob(res.job);
+          if (res.job.status === "pending") {
+            void pollJob(res.job.id);
+          }
         }
       } catch (sugErr) {
         setError(
@@ -475,9 +506,12 @@ export function DresslyApp() {
       try {
         const res = await api.startConsultationTryOn(session.id, versionId);
         setSession(res.session);
-        setBlocked(res.blocked);
-        if (res.job && res.job.status === "pending") {
-          await pollJob(res.job);
+        if (res.blocked) setBlocked(res.blocked);
+        if (res.job) {
+          setJob(res.job);
+          if (res.job.status === "pending") {
+            void pollJob(res.job.id);
+          }
         }
       } catch (tryOnErr) {
         setError(

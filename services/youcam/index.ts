@@ -11,9 +11,12 @@ import { mockYoucamEngine } from "@/services/youcam/mock";
  * missing key instead of quietly producing a fabricated try-on. A wrong image is
  * worse than an honest error, especially in a judged demo.
  */
-export function tryOnEngine(): TryOnEngine {
+export function tryOnEngine(options?: {
+  allowFallbackWhenDisabled?: boolean;
+}): TryOnEngine {
   if (env.mockExternalApis) return mockYoucamEngine;
   if (!env.youcamApiKey) {
+    if (options?.allowFallbackWhenDisabled) return mockYoucamEngine;
     throw new ProviderError("youcam", 401, "YOUCAM_API_KEY is not configured", {
       retryable: false,
     });

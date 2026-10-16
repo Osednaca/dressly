@@ -44,7 +44,7 @@ export async function readPublicAsset(
 ): Promise<{ bytes: Buffer; contentType: string }> {
   const relative = imagePath.replace(/^\/+/, "");
   const disk = path.join(process.cwd(), "public", relative);
-  const bytes = await readFile(disk);
+  const bytes = await readFile(/* turbopackIgnore: true */ disk);
   return { bytes, contentType: contentTypeFor(relative) };
 }
 

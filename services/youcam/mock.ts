@@ -73,12 +73,13 @@ export const mockYoucamEngine: TryOnEngine = {
   async submit(request: TryOnRequest): Promise<TryOnHandle> {
     counter += 1;
     const id = `mock_${counter}_${Date.now()}`;
+    const taskKind = request.taskKind ?? "cloth-v4";
     pending.set(id, {
       request,
       startedAt: Date.now(),
-      readyAt: Date.now() + 2200,
+      readyAt: Date.now() + (taskKind === "bag" ? 0 : 2200),
     });
-    return { id, provider: "mock" };
+    return { id, provider: "mock", taskKind };
   },
 
   async poll(handle: TryOnHandle): Promise<TryOnState> {
