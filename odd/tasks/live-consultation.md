@@ -14,7 +14,7 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 
 ## Scope & Constraints
 
-- **Authorized Scope:** Phase 1 complete; currently executing **Phase 2** (Iterative Design Generation with Runway `nano_banana_2.1` + YouCam Virtual Try-On Loop). Phases 3–4 remain tracked for subsequent execution.
+- **Authorized Scope:** Phases 1 and 2 complete; currently executing **Phase 3** (Isolated Playwright Meeting Bot Worker & Replaceable Audio Capture Pipeline). Phase 4 remains tracked for subsequent execution.
 - **Constraints:**
   - Preserve existing AI Stylist functionality and Midnight Atelier visual identity (`#0b0a09`, Didot/Optima, `.glass`, `shaders/react`).
   - Do not duplicate Gemini, JEV, Runway, or YouCam clients; extend existing services cleanly.
@@ -42,8 +42,10 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
   - Route: `delegated` (writer trigger: touches 8+ files). Commit: `104b176` (`npm run typecheck` clean; `npm test` 53/53; `npm run build` clean). RDD: `disabled/unmanaged`.
 
 ### Phase 3 — Isolated Playwright Meeting Bot Worker & Replaceable Audio Capture Pipeline
-- [ ] **C3.1** Replaceable `ConsultationAudioSource` + `ChromeMeetAudioSource` (`services/meeting-bot/audio-source.ts`, `audio-capture.ts`), Playwright + Chromium bot controller (`playwright-bot.ts`), Gemini Live 16kHz PCM stream (`gemini-stream.ts`), standalone HTTP worker (`worker.ts`), and Next.js bot client (`client.ts`).
-  - Route: `delegated` (pending Phase 3 authorization).
+- [x] **C3.1** Replaceable `ConsultationAudioSource` abstraction + `ChromeMeetAudioSource` / `MeetingAudioCapture` (`services/meeting-bot/contract.ts`, `services/meeting-bot/audio-source.ts`, `services/meeting-bot/audio-capture.ts`) and worker-side Gemini Live 16kHz PCM audio stream (`services/meeting-bot/gemini-stream.ts`).
+  - Route: `delegated` (writer trigger: touches 4+ non-trivial files). Commit: `fc218ac` (`npm run typecheck` clean; `npm test` 53/53). RDD: `disabled/unmanaged`.
+- [x] **C3.2** Install `playwright-core`, implement Playwright + Chromium Google Meet bot controller (`services/meeting-bot/playwright-bot.ts`), standalone HTTP worker (`services/meeting-bot/worker.ts`), Next.js bot client (`services/meeting-bot/client.ts`), webhook route (`app/api/sessions/[id]/consultation/bot-event/route.ts`), orchestrator lifecycle wiring, and Phase 3 tests (`tests/meeting-bot.test.ts`).
+  - Route: `delegated` (writer trigger: touches 7+ files). Commit: `e8971c9` (`npm run typecheck` clean; `npm test` 58/58; `npm run build` clean). RDD: `disabled/unmanaged`.
 
 ### Phase 4 — Flagship Demo Scenario, Dev Diagnostics, Resilience & Documentation
 - [ ] **C4.1** `DRESSLY_CONSULTATION_DEMO_MODE`, `ConsultationDiagnostics.tsx`, structured logging (`lib/server/consultation-logger.ts`), end-to-end flagship scenario tests, and `README.md` documentation.
@@ -66,4 +68,6 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 - **C1.3** completed in commit `0399027` (`npm run typecheck` 0 errors, `npm test` 47/47 passing, `npm run build` clean). RDD: `disabled/unmanaged`.
 - **C2.1** completed in commit `0087f34` (`npm run typecheck` 0 errors, `npm test` 51/51 passing). RDD: `disabled/unmanaged`.
 - **C2.2** completed in commit `104b176` (`npm run typecheck` 0 errors, `npm test` 53/53 passing, `npm run build` clean). RDD: `disabled/unmanaged`.
-- **Phase 2 Status:** Complete. Next step: Await user authorization to begin **Phase 3 (C3.1)**.
+- **C3.1** completed in commit `fc218ac` (`npm run typecheck` 0 errors, `npm test` 53/53 passing). RDD: `disabled/unmanaged`.
+- **C3.2** completed in commit `e8971c9` (`npm run typecheck` 0 errors, `npm test` 58/58 passing, `npm run build` clean). RDD: `disabled/unmanaged`.
+- **Phase 3 Status:** Complete. Next step: Await user authorization to begin **Phase 4 (C4.1)**.
