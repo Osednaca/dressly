@@ -66,6 +66,15 @@ export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
                         {chip}
                       </span>
                     ))
+                  ) : latest.consultationAction && latest.productEvaluation.length > 0 ? (
+                    latest.productEvaluation.map((item) => (
+                      <span
+                        key={item.label}
+                        className="rounded-full border border-line px-2.5 py-1 text-[11px] text-ink-soft"
+                      >
+                        {item.label}
+                      </span>
+                    ))
                   ) : (
                     <span className="text-[12px] text-muted">—</span>
                   )}
@@ -73,7 +82,9 @@ export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
               </Field>
 
               <Field label="Next step">
-                <p className="text-[14px] font-semibold">{actionLabel(latest.action?.decision)}</p>
+                <p className="text-[14px] font-semibold">
+                  {actionLabel(latest.action?.decision ?? latest.consultationAction?.decision)}
+                </p>
               </Field>
 
               <Field label="Selected">
@@ -99,7 +110,9 @@ export function DecisionsPanel({ decisions }: { decisions: DecisionRecord[] }) {
                     <li key={record.id} className="flex items-baseline justify-between text-[12px]">
                       <span className="text-muted">#{record.iteration}</span>
                       <span className="text-ink-soft">
-                        {actionLabel(record.action?.decision)}
+                        {actionLabel(
+                          record.action?.decision ?? record.consultationAction?.decision,
+                        )}
                         {record.selectedProductName ? ` · ${record.selectedProductName}` : ""}
                       </span>
                     </li>

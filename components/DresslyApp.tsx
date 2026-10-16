@@ -9,13 +9,25 @@ import { LookHistory } from "@/components/LookHistory";
 import { Masthead } from "@/components/Masthead";
 import { Onboarding } from "@/components/Onboarding";
 import { ProviderBanner } from "@/components/ProviderBanner";
+import { ConsultationPanel } from "@/components/consultation/ConsultationPanel";
+import { ConsultationSetupModal } from "@/components/consultation/ConsultationSetupModal";
+import { DesignVersionStrip } from "@/components/consultation/DesignVersionStrip";
 import { DresslyAmbient } from "@/components/shaders/DresslyAmbient";
 import { Sparkle } from "@/components/icons";
 import { api } from "@/lib/client/api";
 import type { LiveToolCall } from "@/lib/client/live";
+import { useConsultationEvents } from "@/lib/client/use-consultation-events";
 import { useLiveStylist } from "@/lib/client/use-live-stylist";
-import type { BlockedView, ChatResponse, JobView, SessionPayload, Suggestion } from "@/lib/api-types";
-import type { StylingSession } from "@/lib/types";
+import type {
+  BlockedView,
+  ChatResponse,
+  JobView,
+  SessionPayload,
+  StartConsultationRequest,
+  Suggestion,
+  UpdateConsultationRequest,
+} from "@/lib/api-types";
+import type { DesignFieldDiff, StylingSession } from "@/lib/types";
 
 const POLL_INTERVAL_MS = 1800;
 const MAX_POLLS = 90;
@@ -48,6 +60,13 @@ export function DresslyApp() {
   const [animationBlocked, setAnimationBlocked] = useState<BlockedView | null>(null);
   const [cartAdded, setCartAdded] = useState(false);
   const [finalDismissed, setFinalDismissed] = useState(false);
+
+  const [workspaceMode, setWorkspaceMode] = useState<"stylist" | "consultation">("stylist");
+  const [setupModalOpen, setSetupModalOpen] = useState(false);
+  const [setupModalBusy, setSetupModalBusy] = useState(false);
+  const [setupModalError, setSetupModalError] = useState<string | null>(null);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
+  const [compareWithV1, setCompareWithV1] = useState(false);
 
   const pollToken = useRef(0);
 
@@ -282,17 +301,220 @@ export function DresslyApp() {
     setFinalDismissed(false);
     setAnimationJob(null);
     setAnimationBlocked(null);
+    setWorkspaceMode("stylist");
+    setSetupModalOpen(false);
+    setSelectedVersionId(null);
+    setCompareWithV1(false);
     window.scrollTo({ top: 0 });
   }, []);
+
+  useConsultationEvents({
+    sessionId: session?.id,
+    enabled: Boolean(session?.consultation && session.consultation.status !== "ENDED"),
+    onSessionUpdate: (updatedSession) => {
+      setSession(updatedSession);
+    },
+    onEvent: (event) => {
+      if (event.type === "design.generation.completed") {
+        setSelectedVersionId(event.version.id);
+      } else if (event.type === "vto.failed" && event.blocked) {
+        setBlocked(event.blocked);
+      }
+    },
+  });
+
+  const handleStartConsultation = useCallback(
+    async (req: StartConsultationRequest) => {
+      setSetupModalBusy(true);
+      setSetupModalError(null);
+      setError(null);
+      try {
+        let targetSessionId = session?.id;
+        if (!targetSessionId) {
+          const created = await api.createSession();
+          setSuggestions(created.suggestions);
+          targetSessionId = created.session.id;
+        }
+        const response = await api.startConsultation(targetSessionId, req);
+        setSession(response.session);
+        setSelectedVersionId(response.session.consultation?.currentDesignVersionId ?? null);
+        setCompareWithV1(false);
+        setWorkspaceMode("consultation");
+        setSetupModalOpen(false);
+      } catch (startErr) {
+        setSetupModalError(
+          startErr instanceof Error ? startErr.message : "Could not start consultation.",
+        );
+      } finally {
+        setSetupModalBusy(false);
+      }
+    },
+    [session?.id],
+  );
+
+  const handleUpdateConsultation = useCallback(
+    async (patch: UpdateConsultationRequest) => {
+      if (!session) return;
+      setError(null);
+      try {
+        const res = await api.updateConsultation(session.id, patch);
+        setSession(res.session);
+      } catch (updateErr) {
+        setError(updateErr instanceof Error ? updateErr.message : "Could not update consultation.");
+      }
+    },
+    [session],
+  );
+
+  const handleEndConsultation = useCallback(async () => {
+    if (!session) return;
+    setSending(true);
+    setError(null);
+    try {
+      const res = await api.endConsultation(session.id);
+      setSession(res.session);
+    } catch (endErr) {
+      setError(endErr instanceof Error ? endErr.message : "Could not end consultation.");
+    } finally {
+      setSending(false);
+    }
+  }, [session]);
+
+  const handleSendTranscript = useCallback(
+    async (text: string) => {
+      if (!session) return;
+      setSending(true);
+      setError(null);
+      setBlocked(null);
+      try {
+        const res = await api.sendConsultationTranscript(session.id, {
+          text,
+          isFinal: true,
+          immediate: true,
+        });
+        setSession(res.session);
+        setBlocked(res.blocked);
+        if (res.session.consultation?.currentDesignVersionId) {
+          setSelectedVersionId(res.session.consultation.currentDesignVersionId);
+        }
+        if (res.autoJob && res.autoJob.status === "pending") {
+          await pollJob(res.autoJob);
+        }
+      } catch (transcriptErr) {
+        setError(
+          transcriptErr instanceof Error ? transcriptErr.message : "Could not process speech.",
+        );
+      } finally {
+        setSending(false);
+      }
+    },
+    [pollJob, session],
+  );
+
+  const handleSuggestionAction = useCallback(
+    async (
+      suggestionId: string,
+      action: "apply" | "edit" | "ignore",
+      editedChanges?: DesignFieldDiff[],
+    ) => {
+      if (!session) return;
+      setSending(true);
+      setError(null);
+      setBlocked(null);
+      try {
+        const res = await api.actOnSuggestion(session.id, suggestionId, {
+          action,
+          editedChanges,
+        });
+        setSession(res.session);
+        setBlocked(res.blocked);
+        if (res.session.consultation?.currentDesignVersionId) {
+          setSelectedVersionId(res.session.consultation.currentDesignVersionId);
+        }
+        if (res.job && res.job.status === "pending") {
+          await pollJob(res.job);
+        }
+      } catch (sugErr) {
+        setError(
+          sugErr instanceof Error ? sugErr.message : "Could not process suggestion action.",
+        );
+      } finally {
+        setSending(false);
+      }
+    },
+    [pollJob, session],
+  );
+
+  const handleRestoreVersion = useCallback(
+    async (versionId: string) => {
+      if (!session) return;
+      setSending(true);
+      setError(null);
+      try {
+        const res = await api.restoreDesignVersion(session.id, versionId);
+        setSession(res.session);
+        setSelectedVersionId(versionId);
+        setCompareWithV1(false);
+      } catch (restoreErr) {
+        setError(
+          restoreErr instanceof Error ? restoreErr.message : "Could not restore version.",
+        );
+      } finally {
+        setSending(false);
+      }
+    },
+    [session],
+  );
+
+  const handleConsultationTryOn = useCallback(
+    async (versionId?: string) => {
+      if (!session) return;
+      setSending(true);
+      setError(null);
+      setBlocked(null);
+      try {
+        const res = await api.startConsultationTryOn(session.id, versionId);
+        setSession(res.session);
+        setBlocked(res.blocked);
+        if (res.job && res.job.status === "pending") {
+          await pollJob(res.job);
+        }
+      } catch (tryOnErr) {
+        setError(
+          tryOnErr instanceof Error ? tryOnErr.message : "Virtual try-on is not available yet.",
+        );
+      } finally {
+        setSending(false);
+      }
+    },
+    [pollJob, session],
+  );
 
   const working = sending || job?.status === "pending";
   const completed = session?.status === "COMPLETED";
   const showFinal = Boolean(completed && !finalDismissed);
+  const inConsultationMode = Boolean(workspaceMode === "consultation" && session?.consultation);
 
   return (
     <div className="flex min-h-screen flex-col">
       <DresslyAmbient variant={!session ? "hero" : showFinal ? "cinematic" : "global"} />
-      <Masthead />
+      <Masthead
+        workspaceMode={workspaceMode}
+        consultationActive={Boolean(session?.consultation)}
+        consultationStatus={session?.consultation?.status}
+        onSelectMode={
+          session
+            ? (mode) => {
+                if (mode === "consultation" && !session.consultation) {
+                  setSetupModalOpen(true);
+                } else {
+                  setWorkspaceMode(mode);
+                }
+              }
+            : undefined
+        }
+        onStartConsultationClick={() => setSetupModalOpen(true)}
+      />
       <ProviderBanner />
 
       {error ? (
@@ -305,64 +527,125 @@ export function DresslyApp() {
         <Onboarding busy={onboardingBusy} error={onboardingError} onBegin={begin} />
       ) : (
         <main className="relative z-10 mx-auto grid w-full max-w-[1500px] flex-1 gap-8 px-6 py-8 md:px-10 lg:grid-cols-[minmax(0,1.12fr)_minmax(380px,0.88fr)]">
-          <FittingRoom
-            session={session}
-            job={job}
-            mock={mock}
-            blocked={blocked}
-            onRetry={onRetry}
-            onClearRejections={() => withSession(api.clearRejections)}
-          />
+          <div className="flex min-h-0 flex-col">
+            <FittingRoom
+              session={session}
+              job={job}
+              mock={mock}
+              blocked={blocked}
+              workspaceMode={workspaceMode}
+              selectedVersionId={
+                selectedVersionId ?? session.consultation?.currentDesignVersionId ?? null
+              }
+              compareWithV1={compareWithV1}
+              onChangeViewMode={(mode) => void handleUpdateConsultation({ activeViewMode: mode })}
+              onTryOnVersion={(versionId) => void handleConsultationTryOn(versionId)}
+              onRetry={onRetry}
+              onClearRejections={() => withSession(api.clearRejections)}
+            />
+
+            {inConsultationMode && session.consultation ? (
+              <DesignVersionStrip
+                versions={session.consultation.versions}
+                currentVersionId={session.consultation.currentDesignVersionId}
+                selectedVersionId={
+                  selectedVersionId ?? session.consultation.currentDesignVersionId
+                }
+                compareWithV1={compareWithV1}
+                busy={working}
+                onSelectVersion={(versionId) => {
+                  setSelectedVersionId(versionId);
+                  if (versionId === session.consultation?.originalVersionId) {
+                    setCompareWithV1(false);
+                  }
+                }}
+                onToggleCompare={() => setCompareWithV1((v) => !v)}
+                onRestoreVersion={(versionId) => void handleRestoreVersion(versionId)}
+                onTryOnVersion={(versionId) => void handleConsultationTryOn(versionId)}
+              />
+            ) : null}
+          </div>
 
           <div className="flex min-h-0 flex-col gap-4">
-            <ChatPanel
-              messages={session.messages}
-              suggestions={suggestions}
-              busy={working}
-              onSend={onSend}
-              live={{
-                status: live.status,
-                error: live.error,
-                captions: live.captions,
-                active: live.active,
-                onToggle: () => (live.active ? live.stop() : void live.start()),
-              }}
-            />
+            {inConsultationMode && session.consultation ? (
+              <ConsultationPanel
+                consultation={session.consultation}
+                busy={working}
+                onUpdateSettings={(patch) => void handleUpdateConsultation(patch)}
+                onSendTranscript={(text) => void handleSendTranscript(text)}
+                onApplySuggestion={(suggestionId) =>
+                  void handleSuggestionAction(suggestionId, "apply")
+                }
+                onIgnoreSuggestion={(suggestionId) =>
+                  void handleSuggestionAction(suggestionId, "ignore")
+                }
+                onEditSuggestion={(suggestionId, editedChanges) =>
+                  void handleSuggestionAction(suggestionId, "edit", editedChanges)
+                }
+                onEndConsultation={() => void handleEndConsultation()}
+                onRejoinConsultation={() => setSetupModalOpen(true)}
+              />
+            ) : (
+              <>
+                <ChatPanel
+                  messages={session.messages}
+                  suggestions={suggestions}
+                  busy={working}
+                  onSend={onSend}
+                  live={{
+                    status: live.status,
+                    error: live.error,
+                    captions: live.captions,
+                    active: live.active,
+                    onToggle: () => (live.active ? live.stop() : void live.start()),
+                  }}
+                />
 
-            <LookHistory
-              looks={session.looks}
-              activeLookId={session.activeLookId}
-              busy={working}
-              onRestore={(lookId) => withSession((id) => api.restoreLook(id, lookId))}
-              onFeedback={(lookId, feedback) =>
-                withSession((id) => api.setFeedback(id, lookId, feedback))
-              }
-            />
+                <LookHistory
+                  looks={session.looks}
+                  activeLookId={session.activeLookId}
+                  busy={working}
+                  onRestore={(lookId) => withSession((id) => api.restoreLook(id, lookId))}
+                  onFeedback={(lookId, feedback) =>
+                    withSession((id) => api.setFeedback(id, lookId, feedback))
+                  }
+                />
 
-            <div className="flex gap-3">
-              <button
-                type="button"
-                disabled={working || session.looks.length === 0}
-                onClick={() => withSession(api.finish)}
-                className="sheen flex flex-1 items-center justify-center gap-2 rounded-[3px] border border-chrome/15 bg-white/[0.03] px-4 py-3 text-[12px] uppercase tracking-[0.16em] text-ink-soft transition hover:border-accent/70 hover:text-accent-soft disabled:opacity-50"
-              >
-                <Sparkle width={15} height={15} /> Finish the look
-              </button>
-              {completed ? (
-                <button
-                  type="button"
-                  onClick={() => setFinalDismissed(false)}
-                  className="sheen rounded-[3px] border border-chrome/20 bg-ink px-4 py-3 text-[12px] uppercase tracking-[0.16em] text-paper transition hover:bg-accent hover:text-night"
-                >
-                  View look
-                </button>
-              ) : null}
-            </div>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    disabled={working || session.looks.length === 0}
+                    onClick={() => withSession(api.finish)}
+                    className="sheen flex flex-1 items-center justify-center gap-2 rounded-[3px] border border-chrome/15 bg-white/[0.03] px-4 py-3 text-[12px] uppercase tracking-[0.16em] text-ink-soft transition hover:border-accent/70 hover:text-accent-soft disabled:opacity-50"
+                  >
+                    <Sparkle width={15} height={15} /> Finish the look
+                  </button>
+                  {completed ? (
+                    <button
+                      type="button"
+                      onClick={() => setFinalDismissed(false)}
+                      className="sheen rounded-[3px] border border-chrome/20 bg-ink px-4 py-3 text-[12px] uppercase tracking-[0.16em] text-paper transition hover:bg-accent hover:text-night"
+                    >
+                      View look
+                    </button>
+                  ) : null}
+                </div>
+              </>
+            )}
 
             <DecisionsPanel decisions={session.decisions} />
           </div>
         </main>
       )}
+
+      <ConsultationSetupModal
+        open={setupModalOpen}
+        busy={setupModalBusy}
+        error={setupModalError}
+        initialMeetingUrl={session?.consultation?.meetingUrl}
+        onClose={() => setSetupModalOpen(false)}
+        onStart={(req) => void handleStartConsultation(req)}
+      />
 
       {showFinal && session ? (
         <FinalLook

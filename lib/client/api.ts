@@ -1,11 +1,19 @@
 import type {
   BlockedView,
   ChatResponse,
+  ConsultationResponse,
+  IngestTranscriptRequest,
   JobPollResponse,
   JobView,
   ProvidersResponse,
   SessionPayload,
+  StartConsultationRequest,
+  SuggestionActionRequest,
+  SuggestionActionResponse,
+  TranscriptTurnResponse,
+  UpdateConsultationRequest,
 } from "@/lib/api-types";
+import type { StylingSession } from "@/lib/types";
 
 /**
  * Typed browser client for the Dressly API.
@@ -42,6 +50,76 @@ function postJson<T>(url: string, body?: unknown): Promise<T> {
   });
 }
 
+function patchJson<T>(url: string, body: unknown): Promise<T> {
+  return request<T>(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function startConsultation(
+  sessionId: string,
+  body: StartConsultationRequest,
+): Promise<ConsultationResponse> {
+  return postJson<ConsultationResponse>(`/api/sessions/${sessionId}/consultation`, body);
+}
+
+export function getConsultation(sessionId: string): Promise<{ session: StylingSession }> {
+  return request<{ session: StylingSession }>(`/api/sessions/${sessionId}/consultation`);
+}
+
+export function updateConsultation(
+  sessionId: string,
+  body: UpdateConsultationRequest,
+): Promise<{ session: StylingSession }> {
+  return patchJson<{ session: StylingSession }>(`/api/sessions/${sessionId}/consultation`, body);
+}
+
+export function endConsultation(sessionId: string): Promise<{ session: StylingSession }> {
+  return postJson<{ session: StylingSession }>(`/api/sessions/${sessionId}/consultation/end`);
+}
+
+export function sendConsultationTranscript(
+  sessionId: string,
+  body: IngestTranscriptRequest,
+): Promise<TranscriptTurnResponse> {
+  return postJson<TranscriptTurnResponse>(
+    `/api/sessions/${sessionId}/consultation/transcript`,
+    body,
+  );
+}
+
+export function actOnSuggestion(
+  sessionId: string,
+  suggestionId: string,
+  body: SuggestionActionRequest,
+): Promise<SuggestionActionResponse> {
+  return postJson<SuggestionActionResponse>(
+    `/api/sessions/${sessionId}/consultation/suggestions/${suggestionId}`,
+    body,
+  );
+}
+
+export function restoreDesignVersion(
+  sessionId: string,
+  versionId: string,
+): Promise<{ session: StylingSession }> {
+  return postJson<{ session: StylingSession }>(
+    `/api/sessions/${sessionId}/consultation/versions/${versionId}/restore`,
+  );
+}
+
+export function startConsultationTryOn(
+  sessionId: string,
+  versionId?: string,
+): Promise<{ session: StylingSession; job: JobView | null; blocked: BlockedView | null }> {
+  return postJson<{ session: StylingSession; job: JobView | null; blocked: BlockedView | null }>(
+    `/api/sessions/${sessionId}/consultation/tryon`,
+    { versionId },
+  );
+}
+
 export const api = {
   providers: () => request<ProvidersResponse>("/api/providers"),
   createSession: () => postJson<SessionPayload>("/api/sessions"),
@@ -67,4 +145,12 @@ export const api = {
     postJson<{ job: JobView | null; blocked: BlockedView | null }>(`/api/sessions/${id}/runway`, {
       lookId,
     }),
+  startConsultation,
+  getConsultation,
+  updateConsultation,
+  endConsultation,
+  sendConsultationTranscript,
+  actOnSuggestion,
+  restoreDesignVersion,
+  startConsultationTryOn,
 };
