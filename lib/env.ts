@@ -16,6 +16,21 @@ function flag(name: string, fallback: boolean): boolean {
   return /^(1|true|yes|on)$/i.test(value);
 }
 
+function num(name: string, fallback: number): number {
+  const value = read(name);
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clampedFloat(name: string, fallback: number, min: number, max: number): number {
+  const value = read(name);
+  if (value === undefined) return fallback;
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
 export const env = {
   /** YouCam / Perfect Corp. The mandated core try-on engine. */
   youcamApiKey: read("YOUCAM_API_KEY"),
@@ -40,7 +55,7 @@ export const env = {
   /** Gemini Live — the real-time spoken stylist. */
   geminiLiveModel: read("GEMINI_LIVE_MODEL") ?? "gemini-3.8-live",
 
-  /** Runway — optional P2 animation only. */
+  /** Runway — optional P2 animation and Live Consultation design generation. */
   runwayApiKey: read("RUNWAY_API_KEY"),
   runwayBaseUrl: read("RUNWAY_API_URL") ?? "https://api.dev.runwayml.com",
   /**
@@ -54,6 +69,10 @@ export const env = {
   /** Output duration in seconds; must be within the chosen model's range. */
   runwayDurationSeconds: Number(read("RUNWAY_DURATION_SECONDS") ?? 5),
   runwayEnabled: flag("RUNWAY_ENABLED", false),
+  /** Runway text-to-image model for Live Consultation product design revisions. */
+  runwayImageModel: read("RUNWAY_IMAGE_MODEL") ?? "nano_banana_2.1",
+  /** 3:4 portrait aspect ratio for Live Consultation studio product renders. */
+  runwayImageRatio: read("RUNWAY_IMAGE_RATIO") ?? "896:1200",
 
   /**
    * Development only. Simulates provider responses so the UI can be built without
@@ -63,6 +82,26 @@ export const env = {
 
   /** Preloads a reliable curated flow. Still uses real provider calls. */
   demoMode: flag("DRESSLY_DEMO_MODE", false),
+
+  /** Preloads the V1 burgundy shoulder bag & demo helpers while calling real providers. */
+  consultationDemoMode: flag("DRESSLY_CONSULTATION_DEMO_MODE", false),
+  /** Minimum confidence (0.5..1.0) required when AUTO APPLY is enabled. */
+  consultationAutoApplyThreshold: clampedFloat("CONSULTATION_AUTO_APPLY_THRESHOLD", 0.9, 0.5, 1.0),
+
+  /** Isolated Playwright + Chromium Google Meet bot worker settings. */
+  meetingBotPort: num("MEETING_BOT_PORT", 4100),
+  meetingBotUrl: (read("MEETING_BOT_URL") ?? `http://127.0.0.1:${num("MEETING_BOT_PORT", 4100)}`).replace(
+    /\/+$/,
+    "",
+  ),
+  meetingBotSecret: read("MEETING_BOT_SECRET") ?? "dressly-local-bot-secret",
+  meetingBotProfileDir: read("MEETING_BOT_PROFILE_DIR") ?? "data/bot-profile",
+  meetingAudioBackend: (read("MEETING_AUDIO_BACKEND") ?? "auto") as
+    | "auto"
+    | "webrtc-tap"
+    | "pulseaudio",
+  chromiumExecutablePath: read("CHROMIUM_EXECUTABLE_PATH"),
+  ffmpegPath: read("FFMPEG_PATH"),
 } as const;
 
 export interface ProviderStatus {

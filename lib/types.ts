@@ -173,6 +173,11 @@ export interface DecisionRecord {
     confidence: number;
     distribution: ScoredAlternative[];
   };
+  consultationAction?: {
+    decision: ConsultationAction;
+    confidence: number;
+    distribution: ScoredAlternative[];
+  };
   productEvaluation: ScoredAlternative[];
   selectedProductId?: string;
   selectedProductName?: string;
@@ -199,6 +204,204 @@ export interface ChatMessage {
   role: "user" | "dressly";
   text: string;
   createdAt: string;
+}
+
+/**
+ * Live Design Consultation domain types.
+ */
+export type ConsultationStatus =
+  | "OFFLINE"
+  | "STARTING"
+  | "WAITING_FOR_ADMISSION"
+  | "LIVE"
+  | "GENERATING_DESIGN"
+  | "GENERATING_TRYON"
+  | "RECONNECTING"
+  | "ENDED"
+  | "FAILED";
+
+export type MeetingBotStatus =
+  | "IDLE"
+  | "STARTING"
+  | "OPENING_MEET"
+  | "WAITING_FOR_ADMISSION"
+  | "JOINED"
+  | "LISTENING"
+  | "RECONNECTING"
+  | "FAILED"
+  | "STOPPED";
+
+export const CONSULTATION_ACTIONS = [
+  "IGNORE",
+  "PROPOSE_CHANGE",
+  "ASK_CLARIFICATION",
+  "TRY_ON_CURRENT_DESIGN",
+  "RETURN_TO_PREVIOUS_VERSION",
+  "FINALIZE_DESIGN",
+] as const;
+
+export type ConsultationAction = (typeof CONSULTATION_ACTIONS)[number];
+
+export interface BagDesignState {
+  category: "bag";
+  name: string;
+  silhouette: string;
+  size: string;
+  primaryColor: string;
+  secondaryColor?: string;
+  material: string;
+  texture: string;
+  hardwareColor: string;
+  hardwareStyle: string;
+  strapType: string;
+  strapLength: string;
+  closure: string;
+  structure: string;
+  pattern?: string;
+  pockets?: string[];
+  decorativeDetails?: string[];
+  branding?: string;
+  notes?: string[];
+}
+
+export const DEFAULT_BAG_DESIGN_STATE: BagDesignState = {
+  category: "bag",
+  name: "Atelier Structured Shoulder Bag",
+  silhouette: "structured rectangular shoulder bag",
+  size: "medium",
+  primaryColor: "burgundy",
+  secondaryColor: "tonal burgundy edge paint",
+  material: "full-grain calfskin leather",
+  texture: "smooth",
+  hardwareColor: "silver",
+  hardwareStyle: "minimal geometric clasp",
+  strapType: "shoulder",
+  strapLength: "standard shoulder drop",
+  closure: "front flap with magnetic clasp",
+  structure: "rigid box-gusset construction",
+  pattern: "solid",
+  pockets: ["interior zip compartment", "back slip pocket"],
+  decorativeDetails: ["tonal saddle stitching"],
+  branding: "unbranded clean front",
+  notes: [],
+};
+
+export const DESIGN_FIELD_KEYS = [
+  "name",
+  "silhouette",
+  "size",
+  "primaryColor",
+  "secondaryColor",
+  "material",
+  "texture",
+  "hardwareColor",
+  "hardwareStyle",
+  "strapType",
+  "strapLength",
+  "closure",
+  "structure",
+  "pattern",
+  "branding",
+] as const;
+
+export type DesignFieldKey = (typeof DESIGN_FIELD_KEYS)[number];
+
+export const DESIGN_FIELD_LABELS: Record<DesignFieldKey, string> = {
+  name: "NAME",
+  silhouette: "SILHOUETTE",
+  size: "SIZE",
+  primaryColor: "COLOR",
+  secondaryColor: "ACCENT COLOR",
+  material: "MATERIAL",
+  texture: "TEXTURE",
+  hardwareColor: "HARDWARE",
+  hardwareStyle: "HARDWARE STYLE",
+  strapType: "STRAP",
+  strapLength: "STRAP LENGTH",
+  closure: "CLOSURE",
+  structure: "STRUCTURE",
+  pattern: "PATTERN",
+  branding: "BRANDING",
+};
+
+export interface DesignFieldDiff {
+  field: DesignFieldKey;
+  label: string;
+  previousValue?: string;
+  proposedValue: string;
+}
+
+export interface ProposedDesignChange {
+  id: string;
+  transcriptExcerpt: string;
+  confidence: number;
+  jevAction: ConsultationAction;
+  jevReason: string;
+  provider: "jev" | "fallback";
+  changes: DesignFieldDiff[];
+  fingerprint: string;
+  status: "PENDING" | "APPROVED" | "EDITED" | "IGNORED";
+  timestamp: string;
+}
+
+export interface DesignVersion {
+  id: string;
+  version: number;
+  label: string;
+  summary: string;
+  imageUrl: string;
+  tryOnLookId?: string | null;
+  designState: BagDesignState;
+  sourceSuggestionId?: string;
+  promptUsed?: string;
+  createdAt: string;
+}
+
+export interface TranscriptSegment {
+  id: string;
+  speaker: "MEETING";
+  text: string;
+  isFinal: boolean;
+  timestamp: string;
+}
+
+export interface ConsultationActivityEntry {
+  id: string;
+  timestamp: string;
+  kind:
+    | "session"
+    | "bot"
+    | "speech"
+    | "suggestion"
+    | "approval"
+    | "generation"
+    | "tryon"
+    | "error";
+  text: string;
+}
+
+export interface LiveConsultationSession {
+  id: string;
+  meetingUrl: string;
+  consentConfirmed: boolean;
+  status: ConsultationStatus;
+  botStatus: MeetingBotStatus;
+  botError?: string | null;
+  designState: BagDesignState;
+  originalVersionId: string;
+  currentDesignVersionId: string;
+  activeViewMode: "design" | "tryon";
+  versions: DesignVersion[];
+  pendingSuggestions: ProposedDesignChange[];
+  approvedSuggestions: ProposedDesignChange[];
+  ignoredSuggestions: ProposedDesignChange[];
+  transcript: TranscriptSegment[];
+  activity: ConsultationActivityEntry[];
+  autoApply: boolean;
+  autoApplyThreshold: number;
+  autoTryOn: boolean;
+  startedAt: string;
+  endedAt?: string;
 }
 
 export interface StylingSession {
@@ -229,6 +432,9 @@ export interface StylingSession {
 
   conversationSummary: string;
   status: SessionStatus;
+
+  /** Active or past Live Design Consultation attached to this session. */
+  consultation?: LiveConsultationSession | null;
 }
 
 /** What the orchestrator returns to the route handler and the UI. */
