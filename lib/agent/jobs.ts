@@ -1,15 +1,20 @@
 import type { JobKind, JobStatus, JobView } from "@/lib/api-types";
-import type { AgentAction, CurrentLook } from "@/lib/types";
+import type {
+  AgentAction,
+  BagDesignState,
+  CurrentLook,
+  DesignFieldDiff,
+} from "@/lib/types";
 import type { TryOnHandle } from "@/services/contracts";
 import type { RunwayHandle } from "@/services/runway/contract";
 
 /**
  * In-process job tracking for the asynchronous providers.
  *
- * YouCam generation is genuinely long-running, so a chat turn submits and returns
- * immediately; the browser polls here. Jobs are intentionally memory-only: they are
- * short-lived, tied to one process, and a lost job simply means "try again", which is
- * the honest behaviour after a restart.
+ * YouCam generation and Runway image/video jobs are genuinely long-running, so a turn
+ * submits and returns immediately; the browser polls here. Jobs are intentionally
+ * memory-only: they are short-lived, tied to one process, and a lost job simply means
+ * "try again", which is the honest behaviour after a restart.
  */
 export type JobHandle = TryOnHandle | RunwayHandle;
 
@@ -19,6 +24,7 @@ export interface AgentJob {
   kind: JobKind;
   provider: JobView["provider"];
   handle: JobHandle;
+  externalId?: string;
   productId: string | null;
   productName: string;
   action: AgentAction | null;
@@ -28,18 +34,34 @@ export interface AgentJob {
   pendingItems: CurrentLook;
   startedAt: number;
   status: JobStatus;
+  step?: string;
   message?: string;
   retryable?: boolean;
   lookId?: string;
   /** Number of polls the browser has performed, used for step copy. */
   polls: number;
+
+  /** Live Design Consultation job metadata (`consultation_design` / `consultation_tryon`). */
+  suggestionId?: string;
+  targetDesignState?: BagDesignState;
+  previousDesignState?: BagDesignState;
+  changes?: DesignFieldDiff[];
+  versionLabel?: string;
+  versionSummary?: string;
+  promptUsed?: string;
+  versionId?: string;
+  highResFinal?: boolean;
 }
 
 const jobs = new Map<string, AgentJob>();
 
 export function createJob(job: AgentJob): AgentJob {
-  jobs.set(job.id, job);
-  return job;
+  const normalized: AgentJob = {
+    ...job,
+    externalId: job.externalId ?? job.handle.id,
+  };
+  jobs.set(normalized.id, normalized);
+  return normalized;
 }
 
 export function getJob(id: string): AgentJob | undefined {
@@ -84,10 +106,15 @@ export function jobView(job: AgentJob, lookIndex?: number): JobView {
     view.retryable = job.retryable ?? true;
   }
   if (job.status === "pending") {
-    view.step =
-      job.kind === "runway"
-        ? "Bringing your look to life"
-        : tryOnStep(Date.now() - job.startedAt);
+    if (job.step) {
+      view.step = job.step;
+    } else if (job.kind === "runway") {
+      view.step = "Bringing your look to life";
+    } else {
+      view.step = tryOnStep(Date.now() - job.startedAt);
+    }
+  } else if (job.step) {
+    view.step = job.step;
   }
   return view;
 }
