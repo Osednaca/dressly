@@ -47,14 +47,24 @@ import type {
 import { newId, nowIso } from "@/lib/util/id";
 import { understandConsultationUtterance } from "@/services/gemini/consultation";
 import { buildConsultationJevSignals, decideConsultation } from "@/services/jev";
+import { meetingBotClient } from "@/services/meeting-bot/client";
+import { DEFAULT_BOT_DISPLAY_NAME } from "@/services/meeting-bot/contract";
 import { runwayImageEngine } from "@/services/runway";
+
+function buildBotCallbackUrl(sessionId: string): string {
+  const appBase = (process.env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3000").replace(
+    /\/+$/,
+    "",
+  );
+  return `${appBase}/api/sessions/${encodeURIComponent(sessionId)}/consultation/bot-event`;
+}
 
 export async function startSessionConsultation(
   sessionId: string,
   req: StartConsultationRequest,
 ): Promise<ConsultationResponse | null> {
-  const updated = await mutateSession(sessionId, (session) => {
-    let next = initConsultation(session, {
+  const initialized = await mutateSession(sessionId, (session) =>
+    initConsultation(session, {
       meetingUrl: req.meetingUrl,
       consentConfirmed: req.consentConfirmed,
       initialDesignState: req.initialDesignState,
@@ -62,12 +72,28 @@ export async function startSessionConsultation(
       autoApply: req.autoApply ?? false,
       autoApplyThreshold: env.consultationAutoApplyThreshold,
       autoTryOn: req.autoTryOn ?? false,
-    });
-    next = setConsultationBotStatus(next, "LISTENING", {
-      activityText: "Dressly AI Assistant listening to consultation",
-    });
-    return next;
+    }),
+  );
+
+  if (!initialized || !initialized.consultation) return null;
+
+  const botOutcome = await meetingBotClient.startSession({
+    consultationSessionId: sessionId,
+    meetingUrl: req.meetingUrl,
+    botDisplayName: DEFAULT_BOT_DISPLAY_NAME,
+    callbackUrl: buildBotCallbackUrl(sessionId),
   });
+
+  const activityText = botOutcome.workerConnected
+    ? botOutcome.message
+    : "Dressly AI Assistant listening to consultation";
+
+  const updated = await mutateSession(sessionId, (session) =>
+    setConsultationBotStatus(session, botOutcome.status, {
+      error: botOutcome.status === "FAILED" ? botOutcome.message : null,
+      activityText,
+    }),
+  );
 
   if (!updated || !updated.consultation) return null;
 
@@ -75,7 +101,7 @@ export async function startSessionConsultation(
     type: "bot.status",
     status: updated.consultation.botStatus,
     consultationStatus: updated.consultation.status,
-    message: "Dressly AI Assistant listening to consultation",
+    message: activityText,
     timestamp: nowIso(),
     session: updated,
   });
@@ -84,8 +110,8 @@ export async function startSessionConsultation(
     session: updated,
     bot: {
       status: updated.consultation.botStatus,
-      workerConnected: false,
-      message: "Dressly AI Assistant active and listening.",
+      workerConnected: botOutcome.workerConnected,
+      message: botOutcome.message,
     },
   };
 }
@@ -110,6 +136,7 @@ export async function endSessionConsultation(
   sessionId: string,
 ): Promise<StylingSession | null> {
   clearConsultationDebounce(sessionId);
+  await meetingBotClient.stopSession(sessionId);
   const updated = await mutateSession(sessionId, (session) => endConsultation(session));
   if (!updated) return null;
 
@@ -117,6 +144,33 @@ export async function endSessionConsultation(
     type: "consultation.ended",
     session: updated,
   });
+  return updated;
+}
+
+export async function reconnectSessionConsultation(
+  sessionId: string,
+): Promise<StylingSession | null> {
+  const existing = await getSession(sessionId);
+  if (!existing || !existing.consultation) return null;
+
+  const botOutcome = await meetingBotClient.reconnectSession(sessionId);
+  const updated = await mutateSession(sessionId, (session) =>
+    setConsultationBotStatus(session, botOutcome.status, {
+      error: botOutcome.status === "FAILED" ? botOutcome.message : null,
+      activityText: botOutcome.message,
+    }),
+  );
+  if (!updated || !updated.consultation) return null;
+
+  publishConsultationEvent(sessionId, {
+    type: "bot.status",
+    status: updated.consultation.botStatus,
+    consultationStatus: updated.consultation.status,
+    message: botOutcome.message,
+    timestamp: nowIso(),
+    session: updated,
+  });
+
   return updated;
 }
 
