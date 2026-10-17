@@ -6,6 +6,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import sharp from "sharp";
+import { ensureDemoCustomerPhoto } from "@/lib/agent/consultation-orchestrator";
 import { renderStudioBagSvg } from "@/lib/catalog/bag-svg";
 import { DEFAULT_BAG_DESIGN_STATE } from "@/lib/types";
 
@@ -21,7 +22,9 @@ async function main(): Promise<void> {
     .resize(896, 1200, { fit: "cover" })
     .png({ compressionLevel: 9 })
     .toFile(OUT_FILE);
+  const demoPhotoUrl = await ensureDemoCustomerPhoto();
   console.log("Generated public/catalog/consultation-bag-v1.png (896x1200)");
+  console.log(`Generated demo customer portrait (${demoPhotoUrl}, 900x1200)`);
 }
 
 main().catch((error: unknown) => {

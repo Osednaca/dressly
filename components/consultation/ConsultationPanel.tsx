@@ -1,9 +1,14 @@
 "use client";
 
 import { useState } from "react";
+import { ConsultationDiagnostics } from "@/components/consultation/ConsultationDiagnostics";
 import { SuggestionCard } from "@/components/consultation/SuggestionCard";
 import { ChevronDown, Mic, Send, Sparkle } from "@/components/icons";
 import { DresslyGlass } from "@/components/shaders/DresslyGlass";
+import type {
+  ConsultationDiagnosticRequest,
+  ConsultationDiagnosticResponse,
+} from "@/lib/api-types";
 import type {
   ConsultationStatus,
   DesignFieldDiff,
@@ -61,6 +66,9 @@ export interface ConsultationPanelProps {
   onEditSuggestion: (suggestionId: string, editedChanges: DesignFieldDiff[]) => void;
   onEndConsultation: () => void;
   onRejoinConsultation: () => void;
+  onRunDiagnostic: (
+    req: ConsultationDiagnosticRequest,
+  ) => Promise<ConsultationDiagnosticResponse | null>;
 }
 
 export function ConsultationPanel({
@@ -73,6 +81,7 @@ export function ConsultationPanel({
   onEditSuggestion,
   onEndConsultation,
   onRejoinConsultation,
+  onRunDiagnostic,
 }: ConsultationPanelProps) {
   const [utterance, setUtterance] = useState("");
   const [copied, setCopied] = useState(false);
@@ -81,6 +90,10 @@ export function ConsultationPanel({
   const statusInfo = formatStatusLabel(consultation.status);
   const isEndedOrFailed =
     consultation.status === "ENDED" || consultation.status === "FAILED";
+  const showRejoinButton =
+    isEndedOrFailed ||
+    consultation.botStatus === "FAILED" ||
+    consultation.botStatus === "STOPPED";
 
   const handleCopyMeetLink = async () => {
     try {
@@ -139,7 +152,7 @@ export function ConsultationPanel({
             >
               {copied ? "Copied" : "Copy Meet Link"}
             </button>
-            {isEndedOrFailed ? (
+            {showRejoinButton ? (
               <button
                 type="button"
                 disabled={busy}
@@ -148,7 +161,8 @@ export function ConsultationPanel({
               >
                 Rejoin
               </button>
-            ) : (
+            ) : null}
+            {!isEndedOrFailed ? (
               <button
                 type="button"
                 disabled={busy}
@@ -157,7 +171,7 @@ export function ConsultationPanel({
               >
                 End Consultation
               </button>
-            )}
+            ) : null}
           </div>
         </div>
 
@@ -352,6 +366,9 @@ export function ConsultationPanel({
           ) : null}
         </div>
       </DresslyGlass>
+
+      {/* Developer & Demo Layer Diagnostics Drawer */}
+      <ConsultationDiagnostics busy={busy} onRunDiagnostic={onRunDiagnostic} />
     </div>
   );
 }

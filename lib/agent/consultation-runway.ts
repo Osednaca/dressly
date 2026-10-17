@@ -12,6 +12,7 @@ import {
 } from "@/lib/agent/jobs";
 import { env } from "@/lib/env";
 import { publishConsultationEvent } from "@/lib/server/consultation-events";
+import { logConsultationMilestone } from "@/lib/server/consultation-logger";
 import {
   appendConsultationActivity,
   recordDesignVersion,
@@ -195,6 +196,14 @@ export async function startConsultationDesign(
       mutated ?? setConsultationStatus(session, "GENERATING_DESIGN");
 
     const view = jobView(job);
+    logConsultationMilestone("Runway generation started", {
+      sessionId: session.id,
+      jobId: view.id,
+      provider: engine.provider,
+      model: env.runwayImageModel,
+      versionLabel: fullVersionLabel,
+      suggestionId: params.suggestionId ?? null,
+    });
     publishConsultationEvent(session.id, {
       type: "design.generation.started",
       job: view,
@@ -348,6 +357,14 @@ export async function pollConsultationDesign(
     const view = jobView(completedJob);
 
     if (updatedSession && createdVersion) {
+      logConsultationMilestone("Runway completed", {
+        sessionId: job.sessionId,
+        jobId: view.id,
+        versionId: createdVersion.id,
+        version: createdVersion.version,
+        label: createdVersion.label,
+        imageUrl: createdVersion.imageUrl,
+      });
       publishConsultationEvent(job.sessionId, {
         type: "design.generation.completed",
         version: createdVersion,

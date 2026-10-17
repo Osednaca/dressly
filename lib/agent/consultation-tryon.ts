@@ -10,6 +10,7 @@ import {
 } from "@/lib/agent/jobs";
 import { suggestionsFor } from "@/lib/agent/suggestions";
 import { publishConsultationEvent } from "@/lib/server/consultation-events";
+import { logConsultationMilestone } from "@/lib/server/consultation-logger";
 import {
   appendConsultationActivity,
   attachTryOnToVersion,
@@ -191,6 +192,14 @@ export async function startConsultationTryOn(
       );
 
     const view = jobView(job);
+    logConsultationMilestone("YouCam started", {
+      sessionId: session.id,
+      jobId: view.id,
+      provider: view.provider,
+      versionId: version.id,
+      version: version.version,
+      taskKind: handle.taskKind ?? "bag",
+    });
     publishConsultationEvent(session.id, {
       type: "vto.started",
       job: view,
@@ -411,6 +420,13 @@ export async function pollConsultationTryOn(
     const view = jobView(completedJob, createdLook?.index);
 
     if (updated && createdLook) {
+      logConsultationMilestone("YouCam completed", {
+        sessionId: job.sessionId,
+        jobId: view.id,
+        lookId: createdLook.id,
+        versionId: resolvedVersionId,
+        imagePath: createdLook.imagePath,
+      });
       publishConsultationEvent(job.sessionId, {
         type: "vto.completed",
         look: createdLook,

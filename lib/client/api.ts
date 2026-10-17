@@ -1,6 +1,8 @@
 import type {
   BlockedView,
   ChatResponse,
+  ConsultationDiagnosticRequest,
+  ConsultationDiagnosticResponse,
   ConsultationResponse,
   IngestTranscriptRequest,
   JobPollResponse,
@@ -120,6 +122,16 @@ export function startConsultationTryOn(
   );
 }
 
+export function runConsultationDiagnostic(
+  sessionId: string,
+  body: ConsultationDiagnosticRequest,
+): Promise<ConsultationDiagnosticResponse> {
+  return postJson<ConsultationDiagnosticResponse>(
+    `/api/sessions/${sessionId}/consultation/diagnostics`,
+    body,
+  );
+}
+
 export const api = {
   providers: () => request<ProvidersResponse>("/api/providers"),
   createSession: () => postJson<SessionPayload>("/api/sessions"),
@@ -153,4 +165,5 @@ export const api = {
   actOnSuggestion,
   restoreDesignVersion,
   startConsultationTryOn,
+  runConsultationDiagnostic,
 };

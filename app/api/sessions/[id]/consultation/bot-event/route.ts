@@ -4,6 +4,7 @@ import { enqueueConsultationUtterance } from "@/lib/agent/consultation-aggregato
 import { ingestConsultationTranscript } from "@/lib/agent/consultation-orchestrator";
 import { env } from "@/lib/env";
 import { publishConsultationEvent } from "@/lib/server/consultation-events";
+import { logConsultationMilestone } from "@/lib/server/consultation-logger";
 import { setConsultationBotStatus } from "@/lib/session/reducer";
 import { mutateSession } from "@/lib/session/store";
 import { nowIso } from "@/lib/util/id";
@@ -41,6 +42,34 @@ export async function POST(request: Request, context: Context) {
         );
         if (!updated || !updated.consultation) {
           return jsonResponse({ error: "Consultation session not found" }, 404);
+        }
+        if (
+          event.status === "OPENING_MEET" ||
+          event.status === "WAITING_FOR_ADMISSION"
+        ) {
+          logConsultationMilestone("meet loaded", {
+            sessionId: id,
+            botStatus: event.status,
+            detail: event.detail ?? null,
+          });
+        } else if (event.status === "JOINED") {
+          logConsultationMilestone("bot admitted", {
+            sessionId: id,
+            botStatus: event.status,
+            detail: event.detail ?? null,
+          });
+        } else if (event.status === "LISTENING") {
+          logConsultationMilestone("audio capture started", {
+            sessionId: id,
+            botStatus: event.status,
+            sampleRate: 16000,
+            channels: 1,
+          });
+          logConsultationMilestone("Gemini connected", {
+            sessionId: id,
+            botStatus: event.status,
+            model: env.geminiLiveModel,
+          });
         }
         publishConsultationEvent(id, {
           type: "bot.status",

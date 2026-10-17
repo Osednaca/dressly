@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import {
   clearConsultationDebounce,
   computeChangeFingerprint,
@@ -22,6 +23,7 @@ import type {
 } from "@/lib/api-types";
 import { env } from "@/lib/env";
 import { publishConsultationEvent } from "@/lib/server/consultation-events";
+import { logConsultationMilestone } from "@/lib/server/consultation-logger";
 import {
   actOnProposedSuggestion,
   addProposedSuggestion,
@@ -36,6 +38,8 @@ import {
   updateConsultationSettings,
 } from "@/lib/session/reducer";
 import { getSession, mutateSession } from "@/lib/session/store";
+import { UPLOAD_DIR, writeDataFile } from "@/lib/storage/files";
+import { mediaUrl } from "@/lib/storage/media";
 import type {
   BagDesignState,
   DecisionRecord,
@@ -51,6 +55,73 @@ import { meetingBotClient } from "@/services/meeting-bot/client";
 import { DEFAULT_BOT_DISPLAY_NAME } from "@/services/meeting-bot/contract";
 import { runwayImageEngine } from "@/services/runway";
 
+export const DEMO_CUSTOMER_PORTRAIT_FILE = "demo_customer_portrait.png";
+
+export function renderDemoCustomerPortraitSvg(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200" viewBox="0 0 900 1200">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f5f0e8"/>
+      <stop offset="65%" stop-color="#ebe3d5"/>
+      <stop offset="100%" stop-color="#dfd4c2"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="32%" r="48%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.65"/>
+      <stop offset="100%" stop-color="#ebe3d5" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="coat" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#221e1b"/>
+      <stop offset="100%" stop-color="#141210"/>
+    </linearGradient>
+  </defs>
+  <rect width="900" height="1200" fill="url(#bg)"/>
+  <rect width="900" height="1200" fill="url(#halo)"/>
+  <!-- Studio floor line -->
+  <line x1="120" y1="1080" x2="780" y2="1080" stroke="#c8bca8" stroke-width="1.5"/>
+  <!-- Editorial mannequin / silhouette portrait -->
+  <ellipse cx="450" cy="245" rx="68" ry="84" fill="#d6b99b"/>
+  <rect x="424" y="315" width="52" height="54" rx="18" fill="#cfaea0"/>
+  <!-- Tailored dark atelier coat & shoulders -->
+  <path d="M275 430 C295 372 365 352 450 352 C535 352 605 372 625 430 L665 820 L235 820 Z" fill="url(#coat)"/>
+  <!-- Silk ivory lapel / blouse -->
+  <path d="M405 352 L450 485 L495 352 Z" fill="#f3ede2"/>
+  <!-- Tailored trousers / skirt column -->
+  <rect x="315" y="810" width="270" height="270" rx="8" fill="#1b1816"/>
+  <!-- Arms positioned naturally for shoulder / crossbody handbag framing -->
+  <path d="M278 430 C235 520 228 650 250 760 L296 755 C284 655 290 545 316 462 Z" fill="#1d1917"/>
+  <path d="M622 430 C665 520 672 650 650 760 L604 755 C616 655 610 545 584 462 Z" fill="#1d1917"/>
+</svg>`;
+}
+
+/**
+ * Writes a clean 900x1200 editorial studio silhouette/portrait PNG to `UPLOAD_DIR`
+ * (`demo_customer_portrait.png`) and optionally attaches it to the session when
+ * `session.userPhotoPath` is null so YouCam VTO can run in demo/diagnostic mode
+ * without failing on `PHOTO_REQUIRED`.
+ */
+export async function ensureDemoCustomerPhoto(sessionId?: string): Promise<string> {
+  const svg = renderDemoCustomerPortraitSvg();
+  const pngBuffer = await sharp(Buffer.from(svg, "utf8"), { density: 144 })
+    .resize(900, 1200, { fit: "cover" })
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+
+  await writeDataFile(UPLOAD_DIR, DEMO_CUSTOMER_PORTRAIT_FILE, pngBuffer);
+  const photoUrl = mediaUrl("uploads", DEMO_CUSTOMER_PORTRAIT_FILE);
+
+  if (sessionId) {
+    await mutateSession(sessionId, (session) => {
+      if (session.userPhotoPath) return session;
+      return {
+        ...session,
+        userPhotoPath: photoUrl,
+      };
+    });
+  }
+
+  return photoUrl;
+}
+
 function buildBotCallbackUrl(sessionId: string): string {
   const appBase = (process.env.NEXT_PUBLIC_APP_URL ?? "http://127.0.0.1:3000").replace(
     /\/+$/,
@@ -63,6 +134,10 @@ export async function startSessionConsultation(
   sessionId: string,
   req: StartConsultationRequest,
 ): Promise<ConsultationResponse | null> {
+  if (env.consultationDemoMode) {
+    await ensureDemoCustomerPhoto(sessionId);
+  }
+
   const initialized = await mutateSession(sessionId, (session) =>
     initConsultation(session, {
       meetingUrl: req.meetingUrl,
@@ -77,11 +152,25 @@ export async function startSessionConsultation(
 
   if (!initialized || !initialized.consultation) return null;
 
+  logConsultationMilestone("consultation started", {
+    sessionId,
+    consultationId: initialized.consultation.id,
+    meetingUrl: initialized.consultation.meetingUrl,
+    demoMode: env.consultationDemoMode,
+  });
+
   const botOutcome = await meetingBotClient.startSession({
     consultationSessionId: sessionId,
     meetingUrl: req.meetingUrl,
     botDisplayName: DEFAULT_BOT_DISPLAY_NAME,
     callbackUrl: buildBotCallbackUrl(sessionId),
+  });
+
+  logConsultationMilestone("bot launched", {
+    sessionId,
+    workerConnected: botOutcome.workerConnected,
+    botStatus: botOutcome.status,
+    botDisplayName: DEFAULT_BOT_DISPLAY_NAME,
   });
 
   const activityText = botOutcome.workerConnected
@@ -140,6 +229,11 @@ export async function endSessionConsultation(
   const updated = await mutateSession(sessionId, (session) => endConsultation(session));
   if (!updated) return null;
 
+  logConsultationMilestone("consultation ended", {
+    sessionId,
+    versionsCreated: updated.consultation?.versions.length ?? 0,
+  });
+
   publishConsultationEvent(sessionId, {
     type: "consultation.ended",
     session: updated,
@@ -154,12 +248,31 @@ export async function reconnectSessionConsultation(
   if (!existing || !existing.consultation) return null;
 
   const botOutcome = await meetingBotClient.reconnectSession(sessionId);
-  const updated = await mutateSession(sessionId, (session) =>
-    setConsultationBotStatus(session, botOutcome.status, {
+  logConsultationMilestone("bot launched", {
+    sessionId,
+    reconnected: true,
+    workerConnected: botOutcome.workerConnected,
+    botStatus: botOutcome.status,
+  });
+
+  const updated = await mutateSession(sessionId, (session) => {
+    if (!session.consultation) return session;
+    const base =
+      session.consultation.status === "ENDED" || session.consultation.status === "FAILED"
+        ? {
+            ...session,
+            consultation: {
+              ...session.consultation,
+              status: "RECONNECTING" as const,
+              endedAt: undefined,
+            },
+          }
+        : session;
+    return setConsultationBotStatus(base, botOutcome.status, {
       error: botOutcome.status === "FAILED" ? botOutcome.message : null,
       activityText: botOutcome.message,
-    }),
-  );
+    });
+  });
   if (!updated || !updated.consultation) return null;
 
   publishConsultationEvent(sessionId, {
@@ -378,9 +491,17 @@ async function processFinalUtteranceImmediate(
   if (!afterDecisionSession || !afterDecisionSession.consultation) return null;
 
   if (createdSuggestion && createdDecision) {
+    const detected: ProposedDesignChange = createdSuggestion;
+    logConsultationMilestone("suggestion detected", {
+      sessionId,
+      suggestionId: detected.id,
+      confidence: detected.confidence,
+      jevAction: detected.jevAction,
+      fields: detected.changes.map((c) => c.field),
+    });
     publishConsultationEvent(sessionId, {
       type: "suggestion.created",
-      suggestion: createdSuggestion,
+      suggestion: detected,
       decision: createdDecision,
       session: afterDecisionSession,
     });
@@ -553,6 +674,13 @@ export async function handleSuggestionAction(
       blocked: null,
     };
   }
+
+  logConsultationMilestone("suggestion approved", {
+    sessionId,
+    suggestionId: resolvedSuggestion.id,
+    action: req.action,
+    fields: appliedChanges.map((c) => c.field),
+  });
 
   const nextState = afterActionSession.consultation.designState;
   const prevState = previousState ?? nextState;

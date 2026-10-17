@@ -177,6 +177,32 @@ export interface SuggestionActionResponse {
   blocked: BlockedView | null;
 }
 
+export type ConsultationDiagnosticAction =
+  | "test_bot_join"
+  | "reconnect_bot"
+  | "test_audio_capture"
+  | "test_gemini_stream"
+  | "simulate_transcript"
+  | "simulate_suggestion"
+  | "test_runway_revision"
+  | "test_youcam_vto";
+
+export interface ConsultationDiagnosticRequest {
+  action: ConsultationDiagnosticAction;
+  text?: string;
+  changes?: DesignFieldDiff[];
+}
+
+export interface ConsultationDiagnosticResponse {
+  ok: boolean;
+  action: ConsultationDiagnosticAction;
+  summary: string;
+  details?: Record<string, unknown>;
+  session: StylingSession;
+  job?: JobView | null;
+  blocked?: BlockedView | null;
+}
+
 export type ConsultationSseEvent =
   | {
       type: "bot.status";

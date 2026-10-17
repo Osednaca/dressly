@@ -21,6 +21,8 @@ import { useLiveStylist } from "@/lib/client/use-live-stylist";
 import type {
   BlockedView,
   ChatResponse,
+  ConsultationDiagnosticRequest,
+  ConsultationDiagnosticResponse,
   JobView,
   SessionPayload,
   StartConsultationRequest,
@@ -524,6 +526,40 @@ export function DresslyApp() {
     [pollJob, session],
   );
 
+  const handleRunDiagnostic = useCallback(
+    async (
+      req: ConsultationDiagnosticRequest,
+    ): Promise<ConsultationDiagnosticResponse | null> => {
+      if (!session) return null;
+      setSending(true);
+      setError(null);
+      setBlocked(null);
+      try {
+        const res = await api.runConsultationDiagnostic(session.id, req);
+        setSession(res.session);
+        if (res.blocked) setBlocked(res.blocked);
+        if (res.session.consultation?.currentDesignVersionId) {
+          setSelectedVersionId(res.session.consultation.currentDesignVersionId);
+        }
+        if (res.job) {
+          setJob(res.job);
+          if (res.job.status === "pending") {
+            void pollJob(res.job.id);
+          }
+        }
+        return res;
+      } catch (diagErr) {
+        setError(
+          diagErr instanceof Error ? diagErr.message : "Diagnostic action failed.",
+        );
+        return null;
+      } finally {
+        setSending(false);
+      }
+    },
+    [pollJob, session],
+  );
+
   const working = sending || job?.status === "pending";
   const completed = session?.status === "COMPLETED";
   const showFinal = Boolean(completed && !finalDismissed);
@@ -617,7 +653,10 @@ export function DresslyApp() {
                   void handleSuggestionAction(suggestionId, "edit", editedChanges)
                 }
                 onEndConsultation={() => void handleEndConsultation()}
-                onRejoinConsultation={() => setSetupModalOpen(true)}
+                onRejoinConsultation={() =>
+                  void handleRunDiagnostic({ action: "reconnect_bot" })
+                }
+                onRunDiagnostic={handleRunDiagnostic}
               />
             ) : (
               <>
