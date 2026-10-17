@@ -14,7 +14,7 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 
 ## Scope & Constraints
 
-- **Authorized Scope:** Phases 1 and 2 complete; currently executing **Phase 3** (Isolated Playwright Meeting Bot Worker & Replaceable Audio Capture Pipeline). Phase 4 remains tracked for subsequent execution.
+- **Authorized Scope:** Phases 1, 2, and 3 complete; currently executing **Phase 4** (Flagship Demo Mode, Layer-by-Layer Dev Diagnostics, Structured Logging, Failure Isolation & `README.md` Documentation).
 - **Constraints:**
   - Preserve existing AI Stylist functionality and Midnight Atelier visual identity (`#0b0a09`, Didot/Optima, `.glass`, `shaders/react`).
   - Do not duplicate Gemini, JEV, Runway, or YouCam clients; extend existing services cleanly.
@@ -48,8 +48,8 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
   - Route: `delegated` (writer trigger: touches 7+ files). Commit: `e8971c9` (`npm run typecheck` clean; `npm test` 58/58; `npm run build` clean). RDD: `disabled/unmanaged`.
 
 ### Phase 4 — Flagship Demo Scenario, Dev Diagnostics, Resilience & Documentation
-- [ ] **C4.1** `DRESSLY_CONSULTATION_DEMO_MODE`, `ConsultationDiagnostics.tsx`, structured logging (`lib/server/consultation-logger.ts`), end-to-end flagship scenario tests, and `README.md` documentation.
-  - Route: `delegated` (pending Phase 4 authorization).
+- [x] **C4.1** Structured milestone logger (`lib/server/consultation-logger.ts`), `DRESSLY_CONSULTATION_DEMO_MODE` support, layer-by-layer diagnostic endpoint & UI drawer (`app/api/sessions/[id]/consultation/diagnostics/route.ts`, `components/consultation/ConsultationDiagnostics.tsx`), `[ Rejoin ]` wiring, failure isolation & diagnostic tests (`tests/consultation-diagnostics.test.ts`), and `README.md` documentation.
+  - Route: `delegated` (writer trigger: touches 8+ files). Commit: `202b401` (`npm run typecheck` clean; `npm test` 61/61; `npm run build` clean). RDD: `disabled/unmanaged`.
 
 ## Acceptance Criteria (Phase 1)
 
@@ -70,4 +70,5 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 - **C2.2** completed in commit `104b176` (`npm run typecheck` 0 errors, `npm test` 53/53 passing, `npm run build` clean). RDD: `disabled/unmanaged`.
 - **C3.1** completed in commit `fc218ac` (`npm run typecheck` 0 errors, `npm test` 53/53 passing). RDD: `disabled/unmanaged`.
 - **C3.2** completed in commit `e8971c9` (`npm run typecheck` 0 errors, `npm test` 58/58 passing, `npm run build` clean). RDD: `disabled/unmanaged`.
-- **Phase 3 Status:** Complete. Next step: Await user authorization to begin **Phase 4 (C4.1)**.
+- **C4.1** completed in commit `202b401` (`npm run typecheck` 0 errors, `npm test` 61/61 passing, `npm run build` clean). RDD: `disabled/unmanaged`.
+- **All 4 Phases Complete.** All 25 Definition of Done criteria verified.
