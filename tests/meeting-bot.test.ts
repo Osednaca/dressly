@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { POST as postBotEvent } from "@/app/api/sessions/[id]/consultation/bot-event/route";
 import { startSessionConsultation } from "@/lib/agent/consultation-orchestrator";
-import { env } from "@/lib/env";
+import { env, loadDotEnvFiles } from "@/lib/env";
 import { createSession, getSession } from "@/lib/session/store";
 import {
   ChromeMeetAudioSource,
@@ -86,9 +86,39 @@ test("SimulatedMeetAudioSource and ChromeMeetAudioSource emit 3200-byte 16kHz mo
   assert.equal(capturedChunks[1]?.pcm16le.length, PCM_FRAME_BYTES);
   assert.equal(chromeSource.chunksCaptured, 2);
   assert.equal(chromeSource.bytesCaptured, PCM_FRAME_BYTES * 2);
+  assert.ok(chromeSource.lastRms > 0.1, `Expected lastRms > 0.1, got ${chromeSource.lastRms}`);
+  assert.ok(chromeSource.lastPeak > 0.2, `Expected lastPeak > 0.2, got ${chromeSource.lastPeak}`);
 
   await chromeSource.stop();
   offChrome();
+});
+
+test("loadDotEnvFiles loads .env.local and .env without overwriting existing process.env vars", () => {
+  const tmpDir = fs.mkdtempSync(path.join(process.cwd(), "data", "tmp-env-test-"));
+  const keyA = "DRESSLY_TEST_DOTENV_A";
+  const keyB = "DRESSLY_TEST_DOTENV_B";
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, ".env.local"),
+      `# comment\n${keyA}="from_env_local"\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, ".env"),
+      `${keyA}=from_env\n${keyB}=from_env_fallback # inline comment\n`,
+      "utf8",
+    );
+    delete process.env[keyA];
+    delete process.env[keyB];
+
+    loadDotEnvFiles(tmpDir);
+    assert.equal(process.env[keyA], "from_env_local");
+    assert.equal(process.env[keyB], "from_env_fallback");
+  } finally {
+    delete process.env[keyA];
+    delete process.env[keyB];
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 test("GeminiConsultationLiveStream sends setup frame, streams 16kHz PCM, and emits partial/final transcripts", async () => {
@@ -317,7 +347,10 @@ test("resolveBotProfileDir reuses shared data/bot-profile unless SingletonLock e
   }
 });
 
-test("Real Chromium integration: PlaywrightMeetBotSession joins pre-join/lobby/in-call harness and captures live 16kHz PCM audio", async () => {
+test(
+  "Real Chromium integration: PlaywrightMeetBotSession joins pre-join/lobby/in-call harness and captures live 16kHz PCM audio",
+  { skip: process.env.RUN_CHROMIUM_E2E !== "1" },
+  async () => {
   const webhookEvents: BotWebhookEvent[] = [];
   let submittedGuestName = "";
   let joinButtonClicked = false;
@@ -428,8 +461,9 @@ test("Real Chromium integration: PlaywrightMeetBotSession joins pre-join/lobby/i
     });
   });
 
+  const testSessionId = `real_chromium_test_${Date.now()}`;
   const botSession = new PlaywrightMeetBotSession({
-    consultationSessionId: `real_chromium_test_${Date.now()}`,
+    consultationSessionId: testSessionId,
     meetingUrl: `http://127.0.0.1:${port}/meet-test`,
     botDisplayName: DEFAULT_BOT_DISPLAY_NAME,
     callbackUrl: `http://127.0.0.1:${port}/webhook`,
@@ -445,7 +479,12 @@ test("Real Chromium integration: PlaywrightMeetBotSession joins pre-join/lobby/i
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
       const snap = botSession.getSnapshot();
-      if (snap.status === "LISTENING" && snap.chunksCaptured > 0 && snap.bytesCaptured >= 3200) {
+      if (
+        joinButtonClicked &&
+        snap.status === "LISTENING" &&
+        snap.chunksCaptured > 0 &&
+        snap.bytesCaptured >= 3200
+      ) {
         break;
       }
       await new Promise((r) => setTimeout(r, 100));
@@ -492,6 +531,10 @@ test("Real Chromium integration: PlaywrightMeetBotSession joins pre-join/lobby/i
   } finally {
     await botSession.stop();
     await new Promise<void>((resolve) => harnessServer.close(() => resolve()));
+    const fallbackSubdir = path.resolve(process.cwd(), env.meetingBotProfileDir, testSessionId);
+    if (fs.existsSync(fallbackSubdir)) {
+      fs.rmSync(fallbackSubdir, { recursive: true, force: true });
+    }
   }
 
   assert.equal(botSession.getSnapshot().status, "STOPPED");

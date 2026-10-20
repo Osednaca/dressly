@@ -65,11 +65,17 @@ export async function POST(request: Request, context: Context) {
             sampleRate: 16000,
             channels: 1,
           });
-          logConsultationMilestone("Gemini connected", {
-            sessionId: id,
-            botStatus: event.status,
-            model: env.geminiLiveModel,
-          });
+          if (
+            Boolean(env.geminiApiKey) ||
+            Boolean(event.detail && /gemini/i.test(event.detail))
+          ) {
+            logConsultationMilestone("Gemini connected", {
+              sessionId: id,
+              botStatus: event.status,
+              model: env.geminiLiveModel,
+              detail: event.detail ?? null,
+            });
+          }
         }
         publishConsultationEvent(id, {
           type: "bot.status",
@@ -86,6 +92,7 @@ export async function POST(request: Request, context: Context) {
         if (typeof event.text !== "string" || !event.text.trim()) {
           return jsonResponse({ ok: true });
         }
+        console.log(`[NEXT:BOT-EVENT:${id}] transcript.partial: "${event.text.trim()}"`);
         const turn = await ingestConsultationTranscript(id, {
           text: event.text,
           isFinal: false,
@@ -99,6 +106,7 @@ export async function POST(request: Request, context: Context) {
         if (typeof event.text !== "string" || !event.text.trim()) {
           return jsonResponse({ ok: true });
         }
+        console.log(`[NEXT:BOT-EVENT:${id}] transcript.final: "${event.text.trim()}"`);
         await enqueueConsultationUtterance(id, event.text, async (mergedText) => {
           await ingestConsultationTranscript(id, {
             text: mergedText,
@@ -111,6 +119,9 @@ export async function POST(request: Request, context: Context) {
       }
 
       case "bot.error": {
+        console.error(
+          `[NEXT:BOT-EVENT:${id}] bot.error (recoverable=${event.recoverable}): ${event.message}`,
+        );
         const targetStatus = event.recoverable ? "RECONNECTING" : "FAILED";
         const updated = await mutateSession(id, (session) =>
           setConsultationBotStatus(session, targetStatus, {

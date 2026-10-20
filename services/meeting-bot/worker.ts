@@ -147,10 +147,10 @@ export function createBotWorkerServer(): BotWorkerServerHandle {
       }
 
       const id = body.consultationSessionId.trim();
-      const existing = sessions.get(id);
-      if (existing) {
-        sessions.delete(id);
-        await existing.stop().catch(() => {});
+      // Always stop all prior bot sessions so at most ONE Chrome instance ever runs at a time
+      for (const [prevId, prevSession] of Array.from(sessions.entries())) {
+        sessions.delete(prevId);
+        await prevSession.stop().catch(() => {});
       }
 
       const botSession = new PlaywrightMeetBotSession({
@@ -275,6 +275,16 @@ if (isExecutedAsMain()) {
       console.log(
         `[meeting-bot-worker] Dressly AI Assistant worker listening on http://127.0.0.1:${boundPort}`,
       );
+      console.log(
+        `[meeting-bot-worker] GEMINI_API_KEY   : ${
+          env.geminiApiKey ? "configured" : "MISSING (check .env.local!)"
+        }`,
+      );
+      console.log(`[meeting-bot-worker] GEMINI_LIVE_MODEL: ${env.geminiLiveModel}`);
+      console.log(
+        `[meeting-bot-worker] Chrome binary    : ${resolveChromiumExecutable() ?? "not found"}`,
+      );
+      console.log(`[meeting-bot-worker] Headless default : ${env.meetingBotHeadless}`);
     })
     .catch((err) => {
       console.error("[meeting-bot-worker] failed to start:", err);

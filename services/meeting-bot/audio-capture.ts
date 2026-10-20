@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { env } from "@/lib/env";
 import {
+  computePcm16Levels,
   PCM_BYTES_PER_SAMPLE,
   PCM_CHANNELS,
   PCM_FRAME_BYTES,
@@ -197,13 +198,34 @@ export function buildBrowserAudioCaptureInitScript(): string {
   const SAMPLES_PER_FRAME = ${PCM_SAMPLES_PER_FRAME};
 
   const tappedTrackIds = new Set();
+  const webAudioConnectedTrackIds = new Set();
   const tappedElements = new WeakSet();
   const activePeerConnections = new Set();
   const activeSourceNodes = [];
+  const activeKeepAliveElements = [];
   let audioCtx = null;
   let sinkNode = null;
   let workletReadyPromise = null;
   let fallbackBuffer = [];
+  let trackProcessorFramesReceived = 0;
+
+  function logToNode(message) {
+    try {
+      if (typeof window.__dresslyBotLog === "function") {
+        window.__dresslyBotLog(String(message));
+      } else {
+        console.log("[DresslyAudio]", message);
+      }
+    } catch {
+      // Ignore transient logging errors during page navigation
+    }
+  }
+
+  logToNode(
+    "Audio capture init script installed (MediaStreamTrackProcessor=" +
+      (typeof window.MediaStreamTrackProcessor === "function") +
+      ")",
+  );
 
   function uint8ToBase64(bytes) {
     let binary = "";
@@ -249,15 +271,21 @@ export function buildBrowserAudioCaptureInitScript(): string {
       const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
       if (!AudioContextCtor) return null;
 
-      try {
-        audioCtx = new AudioContextCtor({ sampleRate: TARGET_SAMPLE_RATE });
-      } catch {
-        audioCtx = new AudioContextCtor();
-      }
+      // Always create AudioContext at Chromium's native sample rate (typically 48000 Hz)
+      // so WebRTC remote tracks connected via createMediaStreamSource do not hit
+      // Chromium's resampling silence bug (crbug.com/1080628).
+      audioCtx = new AudioContextCtor();
 
       if (audioCtx.state === "suspended") {
         audioCtx.resume().catch(() => {});
       }
+
+      logToNode(
+        "Initialized WebAudio AudioContext sampleRate=" +
+          audioCtx.sampleRate +
+          " state=" +
+          audioCtx.state,
+      );
 
       const workletCode = \`
         class DresslyMeetPcmWorklet extends AudioWorkletProcessor {
@@ -313,18 +341,26 @@ export function buildBrowserAudioCaptureInitScript(): string {
           }
           const workletNode = new AudioWorkletNode(audioCtx, "dressly-meet-pcm-worklet");
           workletNode.port.onmessage = (evt) => {
+            if (trackProcessorFramesReceived > 0) return;
             if (evt && evt.data) {
               pushBase64ToNode(uint8ToBase64(new Uint8Array(evt.data)));
             }
           };
           const silentGain = audioCtx.createGain();
-          silentGain.gain.value = 0;
+          silentGain.gain.value = 0.0001;
           workletNode.connect(silentGain);
           silentGain.connect(audioCtx.destination);
           sinkNode = workletNode;
+          logToNode(
+            "WebAudio AudioWorkletNode active (ratio=" +
+              (audioCtx.sampleRate / TARGET_SAMPLE_RATE).toFixed(2) +
+              ")",
+          );
           return sinkNode;
         } catch {
-          // Fall through to ScriptProcessorNode when page CSP blocks blob AudioWorklet
+          logToNode(
+            "AudioWorklet blocked by page CSP/TrustedTypes; falling back to ScriptProcessorNode",
+          );
         }
       }
 
@@ -336,6 +372,7 @@ export function buildBrowserAudioCaptureInitScript(): string {
         let count = 0;
 
         processor.onaudioprocess = (event) => {
+          if (trackProcessorFramesReceived > 0) return;
           const inputBuffer = event.inputBuffer;
           if (!inputBuffer || inputBuffer.numberOfChannels < 1) return;
           const ch0 = inputBuffer.getChannelData(0);
@@ -358,10 +395,13 @@ export function buildBrowserAudioCaptureInitScript(): string {
         };
 
         const silentGain = audioCtx.createGain();
-        silentGain.gain.value = 0;
+        silentGain.gain.value = 0.0001;
         processor.connect(silentGain);
         silentGain.connect(audioCtx.destination);
         sinkNode = processor;
+        logToNode(
+          "WebAudio ScriptProcessorNode active (sampleRate=" + audioCtx.sampleRate + ")",
+        );
       }
 
       return sinkNode;
@@ -370,9 +410,9 @@ export function buildBrowserAudioCaptureInitScript(): string {
     return workletReadyPromise;
   }
 
-  function tapRemoteAudioTrack(track) {
-    if (!track || track.kind !== "audio" || tappedTrackIds.has(track.id)) return;
-    tappedTrackIds.add(track.id);
+  function connectTrackToWebAudio(track) {
+    if (!track || webAudioConnectedTrackIds.has(track.id)) return;
+    webAudioConnectedTrackIds.add(track.id);
 
     ensureAudioPipeline()
       .then((node) => {
@@ -384,14 +424,202 @@ export function buildBrowserAudioCaptureInitScript(): string {
         const source = audioCtx.createMediaStreamSource(stream);
         activeSourceNodes.push(source);
         source.connect(node);
+        logToNode("Connected track id=" + track.id + " to WebAudio fallback pipeline");
       })
       .catch(() => {});
   }
 
-  function inspectMediaStream(stream) {
+  async function startTrackProcessorCapture(track) {
+    let loggedFirstFrame = false;
+    let loggedFirstSignal = false;
+
+    try {
+      const processor = new window.MediaStreamTrackProcessor({ track });
+      const reader = processor.readable.getReader();
+      let ratio = 48000 / TARGET_SAMPLE_RATE;
+      let acc = 0;
+      let sum = 0;
+      let count = 0;
+      let sampleQueue = [];
+
+      while (true) {
+        const result = await reader.read();
+        if (result.done || !result.value) break;
+        const audioData = result.value;
+        try {
+          trackProcessorFramesReceived += 1;
+          const srcRate = audioData.sampleRate || 48000;
+          const frames = audioData.numberOfFrames || 0;
+          const channels = audioData.numberOfChannels || 1;
+          const format = audioData.format || "f32-planar";
+
+          if (!loggedFirstFrame) {
+            loggedFirstFrame = true;
+            logToNode(
+              "First AudioData frame received from track id=" +
+                track.id +
+                " sampleRate=" +
+                srcRate +
+                " format=" +
+                format +
+                " frames=" +
+                frames +
+                " channels=" +
+                channels,
+            );
+          }
+
+          if (frames > 0) {
+            ratio = srcRate / TARGET_SAMPLE_RATE;
+            const floatBuf = new Float32Array(frames);
+            let copied = false;
+
+            try {
+              audioData.copyTo(floatBuf, { planeIndex: 0, format: "f32-planar" });
+              copied = true;
+            } catch {
+              try {
+                if (format === "s16" || format === "s16-planar") {
+                  const stride = format === "s16" ? channels : 1;
+                  const i16 = new Int16Array(frames * stride);
+                  audioData.copyTo(i16, { planeIndex: 0 });
+                  for (let k = 0; k < frames; k += 1) {
+                    floatBuf[k] = (i16[k * stride] || 0) / 0x8000;
+                  }
+                  copied = true;
+                } else {
+                  const interleaved = new Float32Array(
+                    frames * (format === "f32" ? channels : 1),
+                  );
+                  audioData.copyTo(interleaved, { planeIndex: 0 });
+                  const stride = format === "f32" ? channels : 1;
+                  for (let k = 0; k < frames; k += 1) {
+                    floatBuf[k] = interleaved[k * stride] || 0;
+                  }
+                  copied = true;
+                }
+              } catch {
+                // Ignore unsupported frame layout
+              }
+            }
+
+            if (copied) {
+              let framePeak = 0;
+              for (let i = 0; i < frames; i += 1) {
+                const s = floatBuf[i] || 0;
+                const abs = Math.abs(s);
+                if (abs > framePeak) framePeak = abs;
+                sum += s;
+                count += 1;
+                acc += 1;
+                if (acc >= ratio) {
+                  acc -= ratio;
+                  sampleQueue.push(sum / count);
+                  sum = 0;
+                  count = 0;
+                }
+              }
+
+              if (!loggedFirstSignal && framePeak > 0.002) {
+                loggedFirstSignal = true;
+                logToNode(
+                  "Non-silent audio energy detected on track id=" +
+                    track.id +
+                    " peak=" +
+                    framePeak.toFixed(4),
+                );
+              }
+
+              while (sampleQueue.length >= SAMPLES_PER_FRAME) {
+                const frameSamples = sampleQueue.slice(0, SAMPLES_PER_FRAME);
+                sampleQueue = sampleQueue.slice(SAMPLES_PER_FRAME);
+                pushBase64ToNode(float32ToPcm16Base64(frameSamples));
+              }
+            }
+          }
+        } finally {
+          try {
+            audioData.close();
+          } catch {
+            // Ignore close errors
+          }
+        }
+      }
+    } catch (err) {
+      logToNode(
+        "MediaStreamTrackProcessor error on track id=" +
+          track.id +
+          " (" +
+          (err && err.message ? err.message : String(err)) +
+          "); using WebAudio fallback",
+      );
+    }
+  }
+
+  function tapRemoteAudioTrack(track, sourceLabel) {
+    if (!track || track.kind !== "audio" || tappedTrackIds.has(track.id)) return;
+    tappedTrackIds.add(track.id);
+
+    logToNode(
+      "Discovered remote audio track id=" +
+        track.id +
+        ' label="' +
+        (track.label || "") +
+        '" state=' +
+        track.readyState +
+        " muted=" +
+        track.muted +
+        " via " +
+        (sourceLabel || "unknown"),
+    );
+
+    try {
+      track.addEventListener("unmute", () => {
+        logToNode("Track unmuted id=" + track.id);
+      });
+      track.addEventListener("mute", () => {
+        logToNode("Track muted id=" + track.id);
+      });
+      track.addEventListener("ended", () => {
+        logToNode("Track ended id=" + track.id);
+      });
+    } catch {
+      // Ignore event listener attachment errors
+    }
+
+    // Ensure Chromium's WebRTC jitter buffer and MediaStream graph actively pull & decode packets
+    try {
+      if (typeof document !== "undefined" && typeof document.createElement === "function") {
+        const keepAliveAudio = document.createElement("audio");
+        tappedElements.add(keepAliveAudio);
+        keepAliveAudio.autoplay = true;
+        keepAliveAudio.playsInline = true;
+        keepAliveAudio.volume = 0.01;
+        keepAliveAudio.style.display = "none";
+        keepAliveAudio.srcObject = new MediaStream([track]);
+        if (document.body) {
+          document.body.appendChild(keepAliveAudio);
+        }
+        keepAliveAudio.play().catch(() => {});
+        activeKeepAliveElements.push(keepAliveAudio);
+      }
+    } catch {
+      // Ignore keep-alive audio element errors
+    }
+
+    // Always connect the native-rate AudioContext graph so Chromium pulls the MediaStreamTrack
+    // immediately and provides an automatic fallback if MediaStreamTrackProcessor is unavailable.
+    connectTrackToWebAudio(track);
+
+    if (typeof window.MediaStreamTrackProcessor === "function") {
+      void startTrackProcessorCapture(track);
+    }
+  }
+
+  function inspectMediaStream(stream, sourceLabel) {
     if (!stream || typeof stream.getAudioTracks !== "function") return;
     for (const track of stream.getAudioTracks()) {
-      tapRemoteAudioTrack(track);
+      tapRemoteAudioTrack(track, sourceLabel);
     }
   }
 
@@ -410,10 +638,12 @@ export function buildBrowserAudioCaptureInitScript(): string {
           "track",
           (event) => {
             if (event && event.track && event.track.kind === "audio") {
-              tapRemoteAudioTrack(event.track);
+              tapRemoteAudioTrack(event.track, "RTCPeerConnection.addEventListener(track)");
             }
             if (event && Array.isArray(event.streams)) {
-              event.streams.forEach(inspectMediaStream);
+              event.streams.forEach((s) =>
+                inspectMediaStream(s, "RTCPeerConnection.addEventListener(streams)"),
+              );
             }
           },
           options,
@@ -436,10 +666,12 @@ export function buildBrowserAudioCaptureInitScript(): string {
         set(handler) {
           const wrapped = (event) => {
             if (event && event.track && event.track.kind === "audio") {
-              tapRemoteAudioTrack(event.track);
+              tapRemoteAudioTrack(event.track, "RTCPeerConnection.ontrack");
             }
             if (event && Array.isArray(event.streams)) {
-              event.streams.forEach(inspectMediaStream);
+              event.streams.forEach((s) =>
+                inspectMediaStream(s, "RTCPeerConnection.ontrack(streams)"),
+              );
             }
             if (typeof handler === "function") {
               return handler.call(this, event);
@@ -457,7 +689,7 @@ export function buildBrowserAudioCaptureInitScript(): string {
         if (Array.isArray(receivers)) {
           for (const receiver of receivers) {
             if (receiver && receiver.track && receiver.track.kind === "audio") {
-              tapRemoteAudioTrack(receiver.track);
+              tapRemoteAudioTrack(receiver.track, "RTCPeerConnection.getReceivers");
             }
           }
         }
@@ -469,6 +701,7 @@ export function buildBrowserAudioCaptureInitScript(): string {
       construct(target, args, newTarget) {
         const pc = Reflect.construct(target, args, newTarget);
         activePeerConnections.add(pc);
+        logToNode("RTCPeerConnection constructed (total=" + activePeerConnections.size + ")");
         return pc;
       },
     });
@@ -494,8 +727,8 @@ export function buildBrowserAudioCaptureInitScript(): string {
         set(value) {
           const result = srcObjectDescriptor.set.call(this, value);
           try {
-            if (value && typeof value.getAudioTracks === "function") {
-              inspectMediaStream(value);
+            if (!tappedElements.has(this) && value && typeof value.getAudioTracks === "function") {
+              inspectMediaStream(value, "HTMLMediaElement.srcObject");
             }
           } catch {
             // Ignore non-MediaStream srcObject assignments
@@ -508,11 +741,13 @@ export function buildBrowserAudioCaptureInitScript(): string {
     const origPlay = HTMLMediaElement.prototype.play;
     HTMLMediaElement.prototype.play = function patchedPlay() {
       try {
-        if (this.srcObject && typeof this.srcObject.getAudioTracks === "function") {
-          inspectMediaStream(this.srcObject);
-        } else if (!tappedElements.has(this) && typeof this.captureStream === "function") {
-          tappedElements.add(this);
-          inspectMediaStream(this.captureStream());
+        if (!tappedElements.has(this)) {
+          if (this.srcObject && typeof this.srcObject.getAudioTracks === "function") {
+            inspectMediaStream(this.srcObject, "HTMLMediaElement.play(srcObject)");
+          } else if (typeof this.captureStream === "function") {
+            tappedElements.add(this);
+            inspectMediaStream(this.captureStream(), "HTMLMediaElement.play(captureStream)");
+          }
         }
       } catch {
         // Ignore cross-origin media elements
@@ -529,10 +764,10 @@ export function buildBrowserAudioCaptureInitScript(): string {
         try {
           audioEl.addEventListener("loadedmetadata", () => {
             if (audioEl.srcObject && typeof audioEl.srcObject.getAudioTracks === "function") {
-              inspectMediaStream(audioEl.srcObject);
+              inspectMediaStream(audioEl.srcObject, "Audio.loadedmetadata(srcObject)");
             } else if (!tappedElements.has(audioEl) && typeof audioEl.captureStream === "function") {
               tappedElements.add(audioEl);
-              inspectMediaStream(audioEl.captureStream());
+              inspectMediaStream(audioEl.captureStream(), "Audio.loadedmetadata(captureStream)");
             }
           });
         } catch {
@@ -565,7 +800,7 @@ export function buildBrowserAudioCaptureInitScript(): string {
                 receiver.track.kind === "audio" &&
                 receiver.track.readyState === "live"
               ) {
-                tapRemoteAudioTrack(receiver.track);
+                tapRemoteAudioTrack(receiver.track, "scanner:RTCPeerConnection.getReceivers");
               }
             }
           }
@@ -575,8 +810,8 @@ export function buildBrowserAudioCaptureInitScript(): string {
       if (typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
         const mediaEls = document.querySelectorAll("audio, video");
         for (const el of mediaEls) {
-          if (el.srcObject && typeof el.srcObject.getAudioTracks === "function") {
-            inspectMediaStream(el.srcObject);
+          if (!tappedElements.has(el) && el.srcObject && typeof el.srcObject.getAudioTracks === "function") {
+            inspectMediaStream(el.srcObject, "scanner:DOMMediaElement");
           }
         }
       }
@@ -613,6 +848,8 @@ export class ChromeMeetAudioSource implements ConsultationAudioSource {
   private ffmpegProcess: ChildProcess | null = null;
   private totalChunksCaptured = 0;
   private totalBytesCaptured = 0;
+  private latestRms = 0;
+  private latestPeak = 0;
 
   constructor(options: ChromeMeetAudioSourceOptions = {}) {
     const rawId = options.sessionId ?? options.consultationSessionId ?? "default";
@@ -644,9 +881,17 @@ export class ChromeMeetAudioSource implements ConsultationAudioSource {
     return this.totalBytesCaptured;
   }
 
+  get lastRms(): number {
+    return this.latestRms;
+  }
+
+  get lastPeak(): number {
+    return this.latestPeak;
+  }
+
   /**
-   * Attaches the `__dresslyPushAudioChunk` binding and browser audio capture init script
-   * to a Playwright page.
+   * Attaches the `__dresslyPushAudioChunk` and `__dresslyBotLog` bindings and browser
+   * audio capture init script to a Playwright page.
    */
   async attachToPage(page: MinimalPlaywrightPage): Promise<void> {
     if (this.pageAttached) return;
@@ -657,6 +902,14 @@ export class ChromeMeetAudioSource implements ConsultationAudioSource {
         this.pushBase64PcmChunk(base64Pcm);
       }
     });
+
+    try {
+      await page.exposeBinding("__dresslyBotLog", (_source: unknown, msg: string) => {
+        console.log(`[BOT:BROWSER:${this.sessionId}] ${msg}`);
+      });
+    } catch {
+      // Binding may already be registered on the BrowserContext
+    }
 
     await page.addInitScript(buildBrowserAudioCaptureInitScript());
   }
@@ -770,6 +1023,9 @@ export class ChromeMeetAudioSource implements ConsultationAudioSource {
   private dispatchFrame(pcm16le: Buffer): void {
     this.totalChunksCaptured += 1;
     this.totalBytesCaptured += pcm16le.length;
+    const levels = computePcm16Levels(pcm16le);
+    this.latestRms = levels.rms;
+    this.latestPeak = levels.peak;
 
     const payload: AudioChunkPayload = {
       pcm16le,

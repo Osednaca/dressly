@@ -53,7 +53,9 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 
 ### Phase 5 (Hardening) — Real Playwright Google Meet Bot & Live Chromium Audio Capture Verification
 - [x] **C5.1** Fix `headless` configuration (`MEETING_BOT_HEADLESS`, defaulting to headed `false` for real Google Meet calls), fix shared persistent profile directory (`data/bot-profile` reused across sessions so Google login persists), harden pre-join/lobby/in-call selectors (continuous pre-join retry loop, EN/ES localization, `srcObject` + `RTCPeerConnection` constructor audio tap), add `scripts/bot-join.ts` (`npm run bot:login` & `npm run bot:join`), fix `ConsultationSetupModal.tsx` demo vs. real Meet URL, and add a real-Chromium integration test in `tests/meeting-bot.test.ts`.
-  - Route: `delegated` (writer trigger: touches 7+ files). Commit: `b9d6039` (`npm run typecheck` clean; `npm test` 63/63 including live Chromium audio capture; `npm run build` clean). RDD: `disabled/unmanaged`.
+  - Route: `delegated` (writer trigger: touches 7+ files). Commit: `b9d6039` / `a993e38` (`npm run typecheck` clean; `npm test` 63/63 including live Chromium audio capture; `npm run build` clean). RDD: `disabled/unmanaged`.
+- [x] **C5.2** Fix `.env.local` loading in standalone `bot:worker` / `bot:join` processes (`lib/env.ts` & `package.json`), upgrade `buildBrowserAudioCaptureInitScript` (`services/meeting-bot/audio-capture.ts`) to use Chromium's native `MediaStreamTrackProcessor` (bypassing Meet CSP/TrustedTypes and `AudioContext` sample-rate mismatch) plus native-rate `AudioContext` fallback, prevent auto-reopening Chrome windows when closed manually, and add rich real-time diagnostic logging (`[BOT:BROWSER]`, `[BOT:TELEMETRY]` RMS/peak levels, `[GEMINI:WS]`, `[GEMINI:TRANSCRIPT]`) across `audio-capture.ts`, `gemini-stream.ts`, `playwright-bot.ts`, `worker.ts`, and `bot-event/route.ts`.
+  - Route: `delegated` (writer trigger: touches 6 files). (`npm run typecheck` clean; `npm test` 63/63 passing, 0 Chrome windows opened during tests). RDD: `disabled/unmanaged`.
 
 ## Acceptance Criteria (Phase 1)
 

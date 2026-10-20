@@ -37,10 +37,36 @@ export interface AudioChunkPayload {
 
 export interface ConsultationAudioSource {
   readonly providerName: "chrome-meet-playwright" | "google-meet-media-api" | "simulated";
+  readonly lastRms?: number;
+  readonly lastPeak?: number;
   start(): Promise<void>;
   stop(): Promise<void>;
   onAudioChunk(callback: (chunk: AudioChunkPayload) => void): () => void;
   onStatusChange?(callback: (status: string, detail?: string) => void): () => void;
+}
+
+/**
+ * Computes normalized RMS (0..1) and peak (0..1) signal levels for a 16-bit
+ * signed little-endian (s16le) PCM buffer.
+ */
+export function computePcm16Levels(pcm16le: Buffer): { rms: number; peak: number } {
+  const sampleCount = Math.floor(pcm16le.length / PCM_BYTES_PER_SAMPLE);
+  if (sampleCount <= 0) {
+    return { rms: 0, peak: 0 };
+  }
+  let sumSquares = 0;
+  let peak = 0;
+  for (let i = 0; i < sampleCount; i += 1) {
+    const sample = pcm16le.readInt16LE(i * PCM_BYTES_PER_SAMPLE) / 0x8000;
+    const abs = Math.abs(sample);
+    if (abs > peak) peak = abs;
+    sumSquares += sample * sample;
+  }
+  const rms = Math.sqrt(sumSquares / sampleCount);
+  return {
+    rms: Math.min(1, rms),
+    peak: Math.min(1, peak),
+  };
 }
 
 export interface SimulatedMeetAudioSourceOptions {
@@ -96,6 +122,8 @@ export class SimulatedMeetAudioSource implements ConsultationAudioSource {
   private frameCounter = 0;
   private totalChunksEmitted = 0;
   private totalBytesEmitted = 0;
+  private latestRms = 0;
+  private latestPeak = 0;
 
   constructor(options: SimulatedMeetAudioSourceOptions = {}) {
     this.intervalMs = Math.max(10, options.intervalMs ?? PCM_FRAME_DURATION_MS);
@@ -114,6 +142,14 @@ export class SimulatedMeetAudioSource implements ConsultationAudioSource {
 
   get bytesEmitted(): number {
     return this.totalBytesEmitted;
+  }
+
+  get lastRms(): number {
+    return this.latestRms;
+  }
+
+  get lastPeak(): number {
+    return this.latestPeak;
   }
 
   async start(): Promise<void> {
@@ -168,6 +204,9 @@ export class SimulatedMeetAudioSource implements ConsultationAudioSource {
     this.frameCounter += 1;
     this.totalChunksEmitted += 1;
     this.totalBytesEmitted += pcm16le.length;
+    const levels = computePcm16Levels(pcm16le);
+    this.latestRms = levels.rms;
+    this.latestPeak = levels.peak;
 
     const payload: AudioChunkPayload = {
       pcm16le,

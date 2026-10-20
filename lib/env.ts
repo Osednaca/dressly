@@ -1,9 +1,61 @@
+import fs from "node:fs";
+import path from "node:path";
+
 /**
  * Server-side environment access.
  *
  * Every provider credential is read here and only here, and every consumer is a
  * server module. Nothing in this file may be imported from a client component.
  */
+
+/**
+ * Loads `.env.local` and `.env` from `cwd` into `process.env` for standalone Node
+ * workers/scripts (`bot:worker`, `bot:join`, `bot:login`) where Next.js is not the
+ * entrypoint. Existing `process.env` variables take precedence.
+ */
+export function loadDotEnvFiles(cwd: string = process.cwd()): void {
+  for (const filename of [".env.local", ".env"]) {
+    const filePath = path.resolve(cwd, filename);
+    if (!fs.existsSync(filePath)) continue;
+    try {
+      const content = fs.readFileSync(filePath, "utf8");
+      for (const rawLine of content.split(/\r?\n/)) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith("#")) continue;
+        const cleaned = line.startsWith("export ") ? line.slice(7).trim() : line;
+        const eqIdx = cleaned.indexOf("=");
+        if (eqIdx <= 0) continue;
+        const key = cleaned.slice(0, eqIdx).trim();
+        if (!key || process.env[key] !== undefined) continue;
+        let val = cleaned.slice(eqIdx + 1).trim();
+        if (
+          (val.startsWith('"') && val.endsWith('"')) ||
+          (val.startsWith("'") && val.endsWith("'"))
+        ) {
+          val = val.slice(1, -1);
+        } else {
+          const commentIdx = val.indexOf(" #");
+          if (commentIdx >= 0) {
+            val = val.slice(0, commentIdx).trim();
+          }
+        }
+        process.env[key] = val;
+      }
+    } catch {
+      // Ignore unreadable env files
+    }
+  }
+}
+
+const isNodeTestRunner =
+  process.env.NODE_ENV === "test" ||
+  Boolean(process.env.NODE_TEST_CONTEXT) ||
+  process.execArgv.includes("--test") ||
+  process.argv.includes("--test");
+
+if (!isNodeTestRunner) {
+  loadDotEnvFiles();
+}
 
 function read(name: string): string | undefined {
   const value = process.env[name]?.trim();

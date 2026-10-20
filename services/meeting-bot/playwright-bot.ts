@@ -41,10 +41,15 @@ export const CHROMIUM_LAUNCH_ARGS = [
   "--use-fake-ui-for-media-stream",
   "--autoplay-policy=no-user-gesture-required",
   "--disable-features=AudioServiceOutOfProcess",
+  "--disable-extensions",
+  "--disable-background-networking",
+  "--disable-sync",
+  "--disable-default-apps",
+  "--renderer-process-limit=2",
 ] as const;
 
-const POLL_INTERVAL_MS = 250;
-const MAX_RECONNECT_ATTEMPTS = 2;
+const POLL_INTERVAL_MS = 1000;
+const MAX_RECONNECT_ATTEMPTS = 0;
 const RECONNECT_BACKOFF_MS = [3000, 6000] as const;
 
 const LEAVE_CALL_SELECTOR =
@@ -277,6 +282,7 @@ export class PlaywrightMeetBotSession {
   private geminiStream: GeminiConsultationLiveStream | null = null;
   private detachAudioChunkListener: (() => void) | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private telemetryTimer: ReturnType<typeof setInterval> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
   private stopPromise: Promise<void> | null = null;
@@ -441,7 +447,21 @@ export class PlaywrightMeetBotSession {
     });
 
     const sharedRoot = path.resolve(process.cwd(), env.meetingBotProfileDir);
-    const profileDir = resolveBotProfileDir(this.consultationSessionId);
+    let profileDir = resolveBotProfileDir(this.consultationSessionId);
+    if (profileDir === sharedRoot) {
+      const windowsLock = path.join(sharedRoot, "lockfile");
+      if (fs.existsSync(windowsLock)) {
+        try {
+          fs.unlinkSync(windowsLock);
+        } catch {
+          profileDir = path.resolve(
+            sharedRoot,
+            sanitizeProfileSubdir(this.consultationSessionId),
+          );
+          fs.mkdirSync(profileDir, { recursive: true });
+        }
+      }
+    }
     const headless = this.requestedHeadless ?? env.meetingBotHeadless;
     const launchArgs = headless
       ? [...CHROMIUM_LAUNCH_ARGS, "--headless=new"]
@@ -508,9 +528,22 @@ export class PlaywrightMeetBotSession {
           }
         },
       );
+      await context.exposeBinding(
+        "__dresslyBotLog",
+        (_source: unknown, msg: string) => {
+          console.log(`[BOT:BROWSER:${this.consultationSessionId}] ${msg}`);
+        },
+      );
 
       const page = context.pages()[0] ?? (await context.newPage());
       this.page = page;
+
+      page.on("console", (msg) => {
+        const text = msg.text();
+        if (text.includes("[DresslyAudio]")) {
+          console.log(`[BOT:PAGE:${this.consultationSessionId}] ${text}`);
+        }
+      });
 
       page.on("crash", () => {
         if (!this.stopped) {
@@ -520,7 +553,13 @@ export class PlaywrightMeetBotSession {
 
       page.on("close", () => {
         if (!this.stopped) {
-          void this.handleUnexpectedDisconnect("Google Meet browser tab closed.");
+          void this.stop();
+        }
+      });
+
+      context.on("close", () => {
+        if (!this.stopped) {
+          void this.stop();
         }
       });
 
@@ -705,7 +744,36 @@ export class PlaywrightMeetBotSession {
   private async startInCallAudioAndGemini(
     chromeAudioSource: ChromeMeetAudioSource,
   ): Promise<void> {
+    console.log(
+      `[BOT:PIPELINE:${this.consultationSessionId}] Starting in-call audio capture (backend=${chromeAudioSource.backend}) and Gemini Live (geminiKeyConfigured=${Boolean(env.geminiApiKey)}, model=${env.geminiLiveModel})...`,
+    );
+
     await chromeAudioSource.start();
+
+    if (this.telemetryTimer) {
+      clearInterval(this.telemetryTimer);
+    }
+    this.telemetryTimer = setInterval(() => {
+      if (this.stopped || this.status !== "LISTENING") return;
+      console.log(
+        `[BOT:TELEMETRY:${this.consultationSessionId}] chunks=${this.chunksCaptured} bytes=${this.bytesCaptured} rms=${chromeAudioSource.lastRms.toFixed(4)} peak=${chromeAudioSource.lastPeak.toFixed(4)} geminiConnected=${this.geminiConnected} geminiSent=${this.geminiStream?.chunksSent ?? 0}`,
+      );
+    }, 2000);
+
+    if (!env.geminiApiKey && !env.mockExternalApis) {
+      const missingKeyMsg =
+        "GEMINI_API_KEY is not set in the bot worker environment! Check .env.local.";
+      console.error(`[BOT:PIPELINE] ERROR: ${missingKeyMsg}`);
+      this.lastError = missingKeyMsg;
+      await this.postWebhook({
+        type: "bot.error",
+        consultationSessionId: this.consultationSessionId,
+        message: missingKeyMsg,
+        recoverable: true,
+        timestamp: nowIso(),
+      });
+      return;
+    }
 
     if (env.geminiApiKey && !env.mockExternalApis) {
       const stream = new GeminiConsultationLiveStream({
@@ -727,8 +795,21 @@ export class PlaywrightMeetBotSession {
             timestamp: nowIso(),
           });
         },
-        onStatusChange: (connected) => {
+        onStatusChange: (connected, detail) => {
           this.geminiConnected = connected;
+          console.log(
+            `[BOT:GEMINI:${this.consultationSessionId}] connected=${connected}${detail ? ` (${detail})` : ""}`,
+          );
+          if (connected && this.status === "LISTENING" && !this.stopped) {
+            void this.postWebhook({
+              type: "bot.status",
+              consultationSessionId: this.consultationSessionId,
+              status: "LISTENING",
+              detail: detail ?? `Gemini Live connected (${env.geminiLiveModel})`,
+              error: null,
+              timestamp: nowIso(),
+            });
+          }
         },
         onError: (err) => {
           this.lastError = err.message;
@@ -828,6 +909,10 @@ export class PlaywrightMeetBotSession {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
+    }
+    if (this.telemetryTimer) {
+      clearInterval(this.telemetryTimer);
+      this.telemetryTimer = null;
     }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);

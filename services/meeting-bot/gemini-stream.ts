@@ -237,6 +237,11 @@ export class GeminiConsultationLiveStream {
     this.turnBuffer = "";
     this.clearSilenceTimer();
 
+    const normalizedModel = normalizeGeminiLiveModel(this.model);
+    console.log(
+      `[GEMINI:WS] Opening BidiGenerateContent WebSocket (model=${normalizedModel})...`,
+    );
+
     const url = `${GEMINI_LIVE_WS_BASE_URL}?key=${encodeURIComponent(key)}`;
     const socket = this.createWebSocket(url);
     socket.binaryType = "arraybuffer";
@@ -249,12 +254,14 @@ export class GeminiConsultationLiveStream {
         try {
           const setupPayload = buildGeminiConsultationSetupMessage(this.model);
           socket.send(JSON.stringify(setupPayload));
+          console.log("[GEMINI:WS] WebSocket open, sent setup payload.");
           if (!settled) {
             settled = true;
             resolve();
           }
         } catch (err) {
           const error = err instanceof Error ? err : new Error(String(err));
+          console.error("[GEMINI:WS:ERROR] Failed to send setup payload:", error.message);
           if (!settled) {
             settled = true;
             reject(error);
@@ -273,6 +280,7 @@ export class GeminiConsultationLiveStream {
           event && typeof event === "object" && "message" in event && typeof event.message === "string"
             ? event.message
             : "Gemini Live WebSocket connection error.";
+        console.error(`[GEMINI:WS:ERROR] ${message}`);
         const error = new Error(message);
         if (!settled) {
           settled = true;
@@ -286,20 +294,31 @@ export class GeminiConsultationLiveStream {
         this.clearSilenceTimer();
         const wasConnected = this.setupComplete;
         this.setupComplete = false;
+        const code = event?.code ?? 1000;
+        const reason = event?.reason || `WebSocket closed (code ${code})`;
 
         if (!settled) {
           settled = true;
-          reject(
-            new Error(
-              `Gemini Live WebSocket closed before open (code ${event?.code ?? "unknown"}).`,
-            ),
+          const err = new Error(
+            `Gemini Live WebSocket closed before open (code ${event?.code ?? "unknown"}: ${reason}).`,
           );
+          console.error(`[GEMINI:WS:ERROR] ${err.message}`);
+          reject(err);
           return;
         }
 
-        if (!this.stopping && wasConnected) {
-          const reason = event?.reason || `WebSocket closed (code ${event?.code ?? 1000})`;
-          this.emitStatus(false, reason);
+        if (!this.stopping) {
+          if (!wasConnected || code !== 1000) {
+            console.error(
+              `[GEMINI:WS:ERROR] WebSocket closed (code=${code}, setupComplete=${wasConnected}): ${reason}`,
+            );
+            this.emitError(
+              new Error(`Gemini Live WebSocket closed (code ${code}): ${reason}`),
+            );
+          }
+          if (wasConnected) {
+            this.emitStatus(false, reason);
+          }
         }
       };
     });
@@ -329,8 +348,15 @@ export class GeminiConsultationLiveStream {
     try {
       this.ws.send(JSON.stringify(frame));
       this.audioChunksSent += 1;
+      if (this.audioChunksSent === 1 || this.audioChunksSent % 50 === 0) {
+        console.log(
+          `[GEMINI:AUDIO] Sent ${this.audioChunksSent} PCM chunks (16kHz mono) to Gemini Live.`,
+        );
+      }
     } catch (err) {
-      this.emitError(err instanceof Error ? err : new Error(String(err)));
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error("[GEMINI:WS:ERROR] Failed to send audio chunk:", error.message);
+      this.emitError(error);
     }
   }
 
@@ -345,6 +371,7 @@ export class GeminiConsultationLiveStream {
     if (!text) {
       return null;
     }
+    console.log(`[GEMINI:TRANSCRIPT:FINAL] "${text}"`);
     for (const listener of this.finalListeners) {
       listener(text);
     }
@@ -421,11 +448,13 @@ export class GeminiConsultationLiveStream {
 
   private handleParsedServerMessage(msg: GeminiLiveServerMessage): void {
     if (msg.error?.message) {
+      console.error(`[GEMINI:WS:ERROR] Server error: ${msg.error.message}`);
       this.emitError(new Error(`Gemini Live error: ${msg.error.message}`));
     }
 
     if (msg.setupComplete !== undefined && !this.setupComplete) {
       this.setupComplete = true;
+      console.log("[GEMINI:WS] setupComplete received! Ready to stream 16kHz PCM audio.");
       this.emitStatus(true, "Gemini Live setupComplete acknowledged.");
     }
 
@@ -439,6 +468,7 @@ export class GeminiConsultationLiveStream {
       this.turnBuffer = joinTranscriptFragments(this.turnBuffer, fragment);
       const currentText = this.turnBuffer.trim();
       if (currentText.length > 0) {
+        console.log(`[GEMINI:TRANSCRIPT:PARTIAL] "${currentText}"`);
         for (const listener of this.partialListeners) {
           listener(currentText);
         }
