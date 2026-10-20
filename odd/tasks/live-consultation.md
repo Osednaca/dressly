@@ -51,6 +51,10 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 - [x] **C4.1** Structured milestone logger (`lib/server/consultation-logger.ts`), `DRESSLY_CONSULTATION_DEMO_MODE` support, layer-by-layer diagnostic endpoint & UI drawer (`app/api/sessions/[id]/consultation/diagnostics/route.ts`, `components/consultation/ConsultationDiagnostics.tsx`), `[ Rejoin ]` wiring, failure isolation & diagnostic tests (`tests/consultation-diagnostics.test.ts`), and `README.md` documentation.
   - Route: `delegated` (writer trigger: touches 8+ files). Commit: `202b401` (`npm run typecheck` clean; `npm test` 61/61; `npm run build` clean). RDD: `disabled/unmanaged`.
 
+### Phase 5 (Hardening) — Real Playwright Google Meet Bot & Live Chromium Audio Capture Verification
+- [x] **C5.1** Fix `headless` configuration (`MEETING_BOT_HEADLESS`, defaulting to headed `false` for real Google Meet calls), fix shared persistent profile directory (`data/bot-profile` reused across sessions so Google login persists), harden pre-join/lobby/in-call selectors (continuous pre-join retry loop, EN/ES localization, `srcObject` + `RTCPeerConnection` constructor audio tap), add `scripts/bot-join.ts` (`npm run bot:login` & `npm run bot:join`), fix `ConsultationSetupModal.tsx` demo vs. real Meet URL, and add a real-Chromium integration test in `tests/meeting-bot.test.ts`.
+  - Route: `delegated` (writer trigger: touches 7+ files). Commit: `b9d6039` (`npm run typecheck` clean; `npm test` 63/63 including live Chromium audio capture; `npm run build` clean). RDD: `disabled/unmanaged`.
+
 ## Acceptance Criteria (Phase 1)
 
 - Starting a consultation requires explicit listening consent and accepts a Google Meet URL (or new Meet creation helper) with external Picture-in-Picture guidance (`Open Meet`, `Copy Meet Link`).
@@ -71,4 +75,5 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 - **C3.1** completed in commit `fc218ac` (`npm run typecheck` 0 errors, `npm test` 53/53 passing). RDD: `disabled/unmanaged`.
 - **C3.2** completed in commit `e8971c9` (`npm run typecheck` 0 errors, `npm test` 58/58 passing, `npm run build` clean). RDD: `disabled/unmanaged`.
 - **C4.1** completed in commit `202b401` (`npm run typecheck` 0 errors, `npm test` 61/61 passing, `npm run build` clean). RDD: `disabled/unmanaged`.
-- **All 4 Phases Complete.** All 25 Definition of Done criteria verified.
+- **C5.1** completed in commit `b9d6039` (`npm run typecheck` 0 errors, `npm test` 63/63 passing including real Chromium `launchPersistentContext` + WebAudio `16 kHz PCM` capture test, `npm run build` clean). RDD: `disabled/unmanaged`.
+- **All Phases & Real-Bot Hardening Complete.**
