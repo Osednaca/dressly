@@ -159,6 +159,7 @@ export function createBotWorkerServer(): BotWorkerServerHandle {
         botDisplayName: body.botDisplayName,
         callbackUrl: body.callbackUrl ?? "",
         audioBackend: body.audioBackend,
+        headless: body.headless,
       });
       sessions.set(id, botSession);
 

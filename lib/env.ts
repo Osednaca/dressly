@@ -16,6 +16,8 @@ function flag(name: string, fallback: boolean): boolean {
   return /^(1|true|yes|on)$/i.test(value);
 }
 
+const bool = flag;
+
 function num(name: string, fallback: number): number {
   const value = read(name);
   if (value === undefined) return fallback;
@@ -96,6 +98,7 @@ export const env = {
   ),
   meetingBotSecret: read("MEETING_BOT_SECRET") ?? "dressly-local-bot-secret",
   meetingBotProfileDir: read("MEETING_BOT_PROFILE_DIR") ?? "data/bot-profile",
+  meetingBotHeadless: bool("MEETING_BOT_HEADLESS", false),
   meetingAudioBackend: (read("MEETING_AUDIO_BACKEND") ?? "auto") as
     | "auto"
     | "webrtc-tap"

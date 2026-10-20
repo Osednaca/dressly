@@ -198,6 +198,8 @@ export function buildBrowserAudioCaptureInitScript(): string {
 
   const tappedTrackIds = new Set();
   const tappedElements = new WeakSet();
+  const activePeerConnections = new Set();
+  const activeSourceNodes = [];
   let audioCtx = null;
   let sinkNode = null;
   let workletReadyPromise = null;
@@ -315,6 +317,10 @@ export function buildBrowserAudioCaptureInitScript(): string {
               pushBase64ToNode(uint8ToBase64(new Uint8Array(evt.data)));
             }
           };
+          const silentGain = audioCtx.createGain();
+          silentGain.gain.value = 0;
+          workletNode.connect(silentGain);
+          silentGain.connect(audioCtx.destination);
           sinkNode = workletNode;
           return sinkNode;
         } catch {
@@ -376,6 +382,7 @@ export function buildBrowserAudioCaptureInitScript(): string {
         }
         const stream = new MediaStream([track]);
         const source = audioCtx.createMediaStreamSource(stream);
+        activeSourceNodes.push(source);
         source.connect(node);
       })
       .catch(() => {});
@@ -388,7 +395,7 @@ export function buildBrowserAudioCaptureInitScript(): string {
     }
   }
 
-  // 1. Hook RTCPeerConnection to intercept all remote participant audio tracks
+  // 1. Hook RTCPeerConnection constructor & prototype to intercept all remote participant audio tracks
   const NativeRTCPeerConnection = window.RTCPeerConnection || window.webkitRTCPeerConnection;
   if (NativeRTCPeerConnection && NativeRTCPeerConnection.prototype) {
     const origAddEventListener = NativeRTCPeerConnection.prototype.addEventListener;
@@ -457,10 +464,47 @@ export function buildBrowserAudioCaptureInitScript(): string {
         return receivers;
       };
     }
+
+    const ProxiedRTCPeerConnection = new Proxy(NativeRTCPeerConnection, {
+      construct(target, args, newTarget) {
+        const pc = Reflect.construct(target, args, newTarget);
+        activePeerConnections.add(pc);
+        return pc;
+      },
+    });
+    window.RTCPeerConnection = ProxiedRTCPeerConnection;
+    if (window.webkitRTCPeerConnection) {
+      window.webkitRTCPeerConnection = ProxiedRTCPeerConnection;
+    }
   }
 
-  // 2. Hook HTMLMediaElement.prototype.play to capture remote <audio>/<video> elements
+  // 2. Hook HTMLMediaElement.prototype.srcObject, HTMLMediaElement.prototype.play, and window.Audio
   if (typeof HTMLMediaElement !== "undefined" && HTMLMediaElement.prototype) {
+    const srcObjectDescriptor = Object.getOwnPropertyDescriptor(
+      HTMLMediaElement.prototype,
+      "srcObject",
+    );
+    if (srcObjectDescriptor && srcObjectDescriptor.set) {
+      Object.defineProperty(HTMLMediaElement.prototype, "srcObject", {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return srcObjectDescriptor.get ? srcObjectDescriptor.get.call(this) : null;
+        },
+        set(value) {
+          const result = srcObjectDescriptor.set.call(this, value);
+          try {
+            if (value && typeof value.getAudioTracks === "function") {
+              inspectMediaStream(value);
+            }
+          } catch {
+            // Ignore non-MediaStream srcObject assignments
+          }
+          return result;
+        },
+      });
+    }
+
     const origPlay = HTMLMediaElement.prototype.play;
     HTMLMediaElement.prototype.play = function patchedPlay() {
       try {
@@ -476,6 +520,70 @@ export function buildBrowserAudioCaptureInitScript(): string {
       return origPlay.apply(this, arguments);
     };
   }
+
+  if (typeof window.Audio === "function") {
+    const NativeAudio = window.Audio;
+    window.Audio = new Proxy(NativeAudio, {
+      construct(target, args, newTarget) {
+        const audioEl = Reflect.construct(target, args, newTarget);
+        try {
+          audioEl.addEventListener("loadedmetadata", () => {
+            if (audioEl.srcObject && typeof audioEl.srcObject.getAudioTracks === "function") {
+              inspectMediaStream(audioEl.srcObject);
+            } else if (!tappedElements.has(audioEl) && typeof audioEl.captureStream === "function") {
+              tappedElements.add(audioEl);
+              inspectMediaStream(audioEl.captureStream());
+            }
+          });
+        } catch {
+          // Ignore listener attachment errors
+        }
+        return audioEl;
+      },
+    });
+  }
+
+  // 3. Periodic 1000ms scanner for active RTCPeerConnections, DOM media elements, and AudioContext resume
+  setInterval(() => {
+    try {
+      if (audioCtx && audioCtx.state === "suspended") {
+        audioCtx.resume().catch(() => {});
+      }
+
+      for (const pc of Array.from(activePeerConnections)) {
+        if (!pc || pc.connectionState === "closed" || pc.signalingState === "closed") {
+          activePeerConnections.delete(pc);
+          continue;
+        }
+        if (typeof pc.getReceivers === "function") {
+          const receivers = pc.getReceivers();
+          if (Array.isArray(receivers)) {
+            for (const receiver of receivers) {
+              if (
+                receiver &&
+                receiver.track &&
+                receiver.track.kind === "audio" &&
+                receiver.track.readyState === "live"
+              ) {
+                tapRemoteAudioTrack(receiver.track);
+              }
+            }
+          }
+        }
+      }
+
+      if (typeof document !== "undefined" && typeof document.querySelectorAll === "function") {
+        const mediaEls = document.querySelectorAll("audio, video");
+        for (const el of mediaEls) {
+          if (el.srcObject && typeof el.srcObject.getAudioTracks === "function") {
+            inspectMediaStream(el.srcObject);
+          }
+        }
+      }
+    } catch {
+      // Ignore periodic scanner errors
+    }
+  }, 1000);
 })();
 `;
 }

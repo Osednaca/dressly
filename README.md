@@ -117,6 +117,8 @@ transition, and light the scene.
 | `npm run gen:catalog` | Regenerate `public/catalog/` (35 flat-lay renders) |
 | `npm run gen:consultation-seed` | Regenerate V1 handbag (`public/catalog/consultation-bag-v1.png`) and demo portrait |
 | `npm run bot:worker` | Start isolated Playwright + Chromium Google Meet bot worker (`127.0.0.1:4100`) |
+| `npm run bot:login` | Launch headed Chromium against `data/bot-profile` for one-time Google account sign-in |
+| `npm run bot:join -- https://meet.google.com/xxx-xxxx-xxx` | Standalone live Google Meet join + 16 kHz audio/Gemini smoke test |
 
 Tests load the TypeScript source directly under Node's native type stripping via
 `scripts/register.mjs`, a tiny resolver for the `@/` alias. No test framework dependency.
@@ -150,12 +152,21 @@ YouCam Virtual Try-On (POST /s2s/v2.0/task/bag & cloth-v4)
 - **`ffmpeg`:** Resolved automatically by `services/meeting-bot/audio-capture.ts` from `FFMPEG_PATH`, `PATH`, or WinGet/system locations.
 - **Linux / Docker Virtual Audio (optional):** `PulseAudio` or `PipeWire-Pulse` (`pactl`) when using `MEETING_AUDIO_BACKEND=pulseaudio`.
 
-### Persistent Google Meet Profile Setup
+### Persistent Google Meet Profile Setup & Live Smoke Test
 
-Google Meet rooms that restrict anonymous guests can use a pre-authenticated persistent
-Chromium profile directory (`MEETING_BOT_PROFILE_DIR=data/bot-profile`):
+Google Meet rooms that restrict anonymous guests or require Google sign-in use a shared
+persistent Chromium profile directory (`MEETING_BOT_PROFILE_DIR=data/bot-profile`) in headed
+mode (`MEETING_BOT_HEADLESS=false` by default):
 
-1. Launch Chromium once against `data/bot-profile` and sign into the dedicated assistant Google account.
+```bash
+# 1. One-time persistent Google account login (opens headed Chromium on accounts.google.com & meet.google.com)
+npm run bot:login
+
+# 2. Standalone live Google Meet join + 16 kHz PCM audio / Gemini Live smoke test
+npm run bot:join -- https://meet.google.com/xxx-xxxx-xxx
+```
+
+1. Run `npm run bot:login` once, sign into the dedicated assistant Google account, and close the browser window (or press `Ctrl+C`) to save the profile in `data/bot-profile`.
 2. Subsequent bot sessions reuse `data/bot-profile` automatically while always joining with microphone and camera muted as **`Dressly AI Assistant`**.
 
 ### Cross-Platform Audio Capture
@@ -185,6 +196,7 @@ All meeting audio capture sits behind the `ConsultationAudioSource` interface (`
 | `MEETING_BOT_URL` | `http://127.0.0.1:4100` | Internal worker URL called by Next.js |
 | `MEETING_BOT_SECRET` | `dressly-local-bot-secret` | Shared `X-Meeting-Bot-Secret` authenticating Next.js ↔ worker requests |
 | `MEETING_BOT_PROFILE_DIR` | `data/bot-profile` | Persistent Chromium profile directory for Google Meet |
+| `MEETING_BOT_HEADLESS` | `false` | Headed mode (`false`) by default for real Google Meet WebRTC media and 2FA/sign-in; set `true` for `--headless=new` CI/test runs |
 | `MEETING_AUDIO_BACKEND` | `auto` | `"auto"`, `"webrtc-tap"`, or `"pulseaudio"` |
 | `CHROMIUM_EXECUTABLE_PATH` | *(auto-detected)* | Optional explicit path to Chromium/Chrome binary |
 | `FFMPEG_PATH` | *(auto-detected)* | Optional explicit path to `ffmpeg` binary |

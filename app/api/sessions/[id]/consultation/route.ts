@@ -16,9 +16,13 @@ type Context = { params: Promise<{ id: string }> };
 const GOOGLE_MEET_URL_RE =
   /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?:[/?#].*)?$/i;
 
+const LOCAL_MEET_TEST_URL_RE =
+  /^https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/.*)?$/i;
+
 function isValidMeetingUrl(url: string): boolean {
   const trimmed = url.trim();
   if (trimmed.startsWith("demo://")) return true;
+  if (LOCAL_MEET_TEST_URL_RE.test(trimmed)) return true;
   return GOOGLE_MEET_URL_RE.test(trimmed);
 }
 

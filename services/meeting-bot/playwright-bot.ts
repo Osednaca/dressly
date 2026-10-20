@@ -43,9 +43,21 @@ export const CHROMIUM_LAUNCH_ARGS = [
   "--disable-features=AudioServiceOutOfProcess",
 ] as const;
 
-const POLL_INTERVAL_MS = 1500;
+const POLL_INTERVAL_MS = 250;
 const MAX_RECONNECT_ATTEMPTS = 2;
 const RECONNECT_BACKOFF_MS = [3000, 6000] as const;
+
+const LEAVE_CALL_SELECTOR =
+  '[aria-label*="Leave call" i], [aria-label*="Salir de la llamada" i], [aria-label*="Abandonar la llamada" i]';
+
+const LOBBY_TEXT_RE =
+  /Asking to be let in|Someone in the call will let you in soon|Wait until a meeting host brings you into the call|You'll join the call when someone lets you in|Solicitando unirse|Alguien de la llamada te dará acceso pronto|Un anfitrión te permitirá unirte pronto/i;
+
+const ENTRY_BLOCKED_TEXT_RE =
+  /You can't join this video call|No puedes unirte a esta videollamada|Check your meeting code|Invalid video call name|Sign in to join this meeting|Inicia sesión para unirte/i;
+
+const CALL_ENDED_TEXT_RE =
+  /You've left the meeting|Return to home screen|You were removed from the meeting|The call ended|Has salido de la reunión|Volver a la pantalla de inicio|Te han quitado de la reunión|La llamada ha terminado/i;
 
 function findInSystemPath(binaryName: string): string | null {
   const locator = process.platform === "win32" ? "where" : "which";
@@ -219,12 +231,35 @@ function sanitizeProfileSubdir(raw: string): string {
   return cleaned.length > 0 ? cleaned : "default";
 }
 
+/**
+ * Resolves the persistent Chromium user-data directory for the Google Meet bot.
+ * Uses the shared root `data/bot-profile` (`env.meetingBotProfileDir`) by default so
+ * Google authentication saved via `npm run bot:login` persists across all consultation
+ * sessions. Falls back to a session-scoped subdirectory only when `SingletonLock`
+ * indicates another Chromium instance is actively holding the shared profile.
+ */
+export function resolveBotProfileDir(consultationSessionId: string): string {
+  const sharedRoot = path.resolve(process.cwd(), env.meetingBotProfileDir);
+  fs.mkdirSync(sharedRoot, { recursive: true });
+  const singletonLock = path.join(sharedRoot, "SingletonLock");
+  if (fs.existsSync(singletonLock)) {
+    const fallbackDir = path.resolve(
+      sharedRoot,
+      sanitizeProfileSubdir(consultationSessionId),
+    );
+    fs.mkdirSync(fallbackDir, { recursive: true });
+    return fallbackDir;
+  }
+  return sharedRoot;
+}
+
 export class PlaywrightMeetBotSession {
   readonly consultationSessionId: string;
   readonly meetingUrl: string;
   readonly botDisplayName: string;
   readonly callbackUrl: string;
   readonly requestedAudioBackend: AudioBackendMode;
+  readonly requestedHeadless?: boolean;
 
   private status: MeetingBotStatus = "STARTING";
   private effectiveAudioBackend: string;
@@ -246,6 +281,7 @@ export class PlaywrightMeetBotSession {
   private stopPromise: Promise<void> | null = null;
   private inCallPipelineStarted = false;
   private reconnectingInFlight = false;
+  private joinClicked = false;
 
   constructor(req: StartBotSessionRequest) {
     this.consultationSessionId = req.consultationSessionId;
@@ -253,6 +289,7 @@ export class PlaywrightMeetBotSession {
     this.botDisplayName = req.botDisplayName?.trim() || DEFAULT_BOT_DISPLAY_NAME;
     this.callbackUrl = req.callbackUrl.trim();
     this.requestedAudioBackend = req.audioBackend ?? env.meetingAudioBackend;
+    this.requestedHeadless = req.headless;
     this.effectiveAudioBackend = this.isSimulatedMode()
       ? "simulated"
       : this.requestedAudioBackend === "auto"
@@ -273,12 +310,14 @@ export class PlaywrightMeetBotSession {
   }
 
   getSnapshot(): BotSessionSnapshot {
+    const headless = this.requestedHeadless ?? env.meetingBotHeadless;
     return {
       consultationSessionId: this.consultationSessionId,
       meetingUrl: this.meetingUrl,
       botDisplayName: this.botDisplayName,
       status: this.status,
       audioBackend: this.effectiveAudioBackend,
+      headless,
       chunksCaptured: this.chunksCaptured,
       bytesCaptured: this.bytesCaptured,
       geminiConnected: this.geminiConnected,
@@ -313,6 +352,7 @@ export class PlaywrightMeetBotSession {
 
     this.reconnectAttempts += 1;
     this.inCallPipelineStarted = false;
+    this.joinClicked = false;
     await this.transitionStatus("RECONNECTING", {
       detail: `Reconnecting ${this.botDisplayName} to Google Meet (attempt ${this.reconnectAttempts})`,
     });
@@ -399,12 +439,12 @@ export class PlaywrightMeetBotSession {
       detail: `Launching ${this.botDisplayName} and opening Google Meet`,
     });
 
-    const profileDir = path.resolve(
-      process.cwd(),
-      env.meetingBotProfileDir,
-      sanitizeProfileSubdir(this.consultationSessionId),
-    );
-    fs.mkdirSync(profileDir, { recursive: true });
+    const sharedRoot = path.resolve(process.cwd(), env.meetingBotProfileDir);
+    const profileDir = resolveBotProfileDir(this.consultationSessionId);
+    const headless = this.requestedHeadless ?? env.meetingBotHeadless;
+    const launchArgs = headless
+      ? [...CHROMIUM_LAUNCH_ARGS, "--headless=new"]
+      : [...CHROMIUM_LAUNCH_ARGS];
 
     const chromeAudioSource = new ChromeMeetAudioSource({
       consultationSessionId: this.consultationSessionId,
@@ -427,13 +467,29 @@ export class PlaywrightMeetBotSession {
         launchEnv.PULSE_SINK = chromeAudioSource.sinkName;
       }
 
-      const context = await chromium.launchPersistentContext(profileDir, {
+      const launchOptions = {
         executablePath,
-        headless: true,
-        args: [...CHROMIUM_LAUNCH_ARGS],
+        headless,
+        args: launchArgs,
         ignoreDefaultArgs: ["--mute-audio"],
         env: launchEnv as Record<string, string>,
-      });
+      };
+
+      let context: BrowserContext;
+      try {
+        context = await chromium.launchPersistentContext(profileDir, launchOptions);
+      } catch (launchErr) {
+        if (profileDir === sharedRoot) {
+          const fallbackProfileDir = path.resolve(
+            sharedRoot,
+            sanitizeProfileSubdir(this.consultationSessionId),
+          );
+          fs.mkdirSync(fallbackProfileDir, { recursive: true });
+          context = await chromium.launchPersistentContext(fallbackProfileDir, launchOptions);
+        } else {
+          throw launchErr;
+        }
+      }
 
       if (this.stopped) {
         await context.close().catch(() => {});
@@ -441,6 +497,17 @@ export class PlaywrightMeetBotSession {
       }
 
       this.context = context;
+      await context.addInitScript(buildOutgoingMediaMuteInitScript());
+      await context.addInitScript(buildBrowserAudioCaptureInitScript());
+      await context.exposeBinding(
+        "__dresslyPushAudioChunk",
+        (_source: unknown, base64Pcm: string) => {
+          if (typeof base64Pcm === "string" && base64Pcm.length > 0) {
+            chromeAudioSource.pushBase64PcmChunk(base64Pcm);
+          }
+        },
+      );
+
       const page = context.pages()[0] ?? (await context.newPage());
       this.page = page;
 
@@ -456,17 +523,7 @@ export class PlaywrightMeetBotSession {
         }
       });
 
-      await page.addInitScript(buildOutgoingMediaMuteInitScript());
-      await page.addInitScript(buildBrowserAudioCaptureInitScript());
-      await page.exposeBinding(
-        "__dresslyPushAudioChunk",
-        (_source: unknown, base64Pcm: string) => {
-          if (typeof base64Pcm === "string" && base64Pcm.length > 0) {
-            chromeAudioSource.pushBase64PcmChunk(base64Pcm);
-          }
-        },
-      );
-
+      this.joinClicked = false;
       await page.goto(this.meetingUrl, {
         waitUntil: "domcontentloaded",
         timeout: 30_000,
@@ -474,7 +531,7 @@ export class PlaywrightMeetBotSession {
 
       if (this.stopped) return;
 
-      await this.configurePreJoinAndRequestEntry(page);
+      await this.tryPreJoinStep(page);
       this.startMeetStatePoller(page, chromeAudioSource);
     } catch (err) {
       if (this.stopped) return;
@@ -483,37 +540,68 @@ export class PlaywrightMeetBotSession {
     }
   }
 
-  private async configurePreJoinAndRequestEntry(page: Page): Promise<void> {
+  private async tryPreJoinStep(page: Page): Promise<void> {
+    if (this.stopped || this.joinClicked) return;
+
     try {
-      // 1. Mute microphone and camera toggles on the Google Meet pre-join screen if currently on
-      const muteSelectors = [
-        '[aria-label*="Turn off microphone" i]',
-        '[aria-label*="Turn off camera" i]',
+      // 1. Dismiss any pre-join permission/device banner if visible (EN / ES)
+      const dismissSelectors = [
+        'button:has-text("Continue without microphone and camera")',
+        'button:has-text("Continuar sin micrófono ni cámara")',
+        'button:has-text("Dismiss")',
+        'button:has-text("Got it")',
+        'button:has-text("Entendido")',
       ];
-      for (const selector of muteSelectors) {
-        const toggle = page.locator(selector).first();
-        if (await toggle.isVisible({ timeout: 1500 }).catch(() => false)) {
-          await toggle.click({ timeout: 2000 }).catch(() => {});
+      for (const selector of dismissSelectors) {
+        const bannerBtn = page.locator(selector).first();
+        if (await bannerBtn.isVisible().catch(() => false)) {
+          await bannerBtn.click({ timeout: 1000 }).catch(() => {});
         }
       }
 
-      // 2. Fill visible guest display name: "Dressly AI Assistant"
-      const nameInput = page
-        .locator('input[placeholder*="Your name" i], input[aria-label*="Your name" i]')
-        .first();
-      if (await nameInput.isVisible({ timeout: 2500 }).catch(() => false)) {
-        await nameInput.fill(this.botDisplayName, { timeout: 2500 }).catch(() => {});
+      // 2. Mute microphone and camera toggles on the Google Meet pre-join screen if currently unmuted (EN / ES)
+      const muteToggleGroups = [
+        '[data-is-muted="false"][aria-label*="microphone" i], [data-is-muted="false"][aria-label*="micrófono" i], [aria-label*="Turn off microphone" i], [aria-label*="Desactivar micrófono" i]',
+        '[data-is-muted="false"][aria-label*="camera" i], [data-is-muted="false"][aria-label*="cámara" i], [aria-label*="Turn off camera" i], [aria-label*="Desactivar cámara" i]',
+      ];
+      for (const selector of muteToggleGroups) {
+        const toggle = page.locator(selector).first();
+        if (await toggle.isVisible().catch(() => false)) {
+          await toggle.click({ timeout: 1000 }).catch(() => {});
+        }
       }
 
-      // 3. Click "Ask to join" or "Join now"
-      const joinButton = page
-        .locator('button:has-text("Ask to join"), button:has-text("Join now")')
+      // 3. Fill visible guest display name ("Dressly AI Assistant") and dispatch input/change events
+      const nameInput = page
+        .locator(
+          'input[placeholder*="Your name" i], input[aria-label*="Your name" i], input[placeholder*="Tu nombre" i], input[aria-label*="Tu nombre" i]',
+        )
         .first();
-      if (await joinButton.isVisible({ timeout: 2500 }).catch(() => false)) {
-        await joinButton.click({ timeout: 3000 }).catch(() => {});
+      if (await nameInput.isVisible().catch(() => false)) {
+        await nameInput.fill(this.botDisplayName, { timeout: 1500 }).catch(() => {});
+        await nameInput
+          .evaluate((el, displayName) => {
+            if (el instanceof HTMLInputElement && el.value !== displayName) {
+              el.value = displayName;
+            }
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+          }, this.botDisplayName)
+          .catch(() => {});
+      }
+
+      // 4. Click join button (EN / ES)
+      const joinButton = page
+        .locator(
+          'button:has-text("Ask to join"), button:has-text("Join now"), button:has-text("Solicitar unirse"), button:has-text("Unirse ahora"), button:has-text("Join anyway"), button:has-text("Switch here")',
+        )
+        .first();
+      if (await joinButton.isVisible().catch(() => false)) {
+        await joinButton.click({ timeout: 1500 });
+        this.joinClicked = true;
       }
     } catch {
-      // Non-fatal: the state poller continues inspecting lobby / in-call controls
+      // Non-fatal: the state poller continues retrying pre-join and inspecting lobby / in-call controls
     }
   }
 
@@ -522,13 +610,16 @@ export class PlaywrightMeetBotSession {
       clearInterval(this.pollTimer);
     }
 
+    let inspecting = false;
+
     const inspectOnce = async () => {
-      if (this.stopped || this.reconnectingInFlight) return;
+      if (this.stopped || this.reconnectingInFlight || inspecting) return;
+      inspecting = true;
 
       try {
-        // 1. Check if in-call controls ("Leave call") are visible
-        const leaveButton = page.locator('[aria-label*="Leave call" i]').first();
-        const inCall = await leaveButton.isVisible({ timeout: 400 }).catch(() => false);
+        // 1. Check if in-call controls ("Leave call" / "Salir de la llamada") are visible
+        const leaveButton = page.locator(LEAVE_CALL_SELECTOR).first();
+        const inCall = await leaveButton.isVisible().catch(() => false);
         if (inCall) {
           if (!this.inCallPipelineStarted) {
             this.inCallPipelineStarted = true;
@@ -546,13 +637,30 @@ export class PlaywrightMeetBotSession {
           return;
         }
 
-        // 2. Check if waiting in the Google Meet lobby for host admission
-        const bodyText = (await page.locator("body").innerText({ timeout: 600 }).catch(() => "")) || "";
-        const inLobby =
-          /Asking to be let in|Someone in the call will let you in soon|Wait until a meeting host brings you into the call/i.test(
-            bodyText,
-          );
-        if (inLobby) {
+        // 2. Inspect page text for entry blocks, lobby state, or call termination
+        const bodyText =
+          (await page.locator("body").innerText({ timeout: 500 }).catch(() => "")) || "";
+
+        if (ENTRY_BLOCKED_TEXT_RE.test(bodyText)) {
+          this.clearTimers();
+          const blockMessage =
+            "Google Meet requires sign-in or rejected the meeting code. Run 'npm run bot:login' once to authenticate the persistent bot profile.";
+          await this.transitionStatus("FAILED", {
+            detail: blockMessage,
+            error: blockMessage,
+          });
+          await this.postWebhook({
+            type: "bot.error",
+            consultationSessionId: this.consultationSessionId,
+            message: blockMessage,
+            recoverable: false,
+            timestamp: nowIso(),
+          });
+          return;
+        }
+
+        if (LOBBY_TEXT_RE.test(bodyText)) {
+          this.joinClicked = true;
           if (this.status !== "WAITING_FOR_ADMISSION") {
             await this.transitionStatus("WAITING_FOR_ADMISSION", {
               detail: `${this.botDisplayName} waiting in Google Meet lobby for host admission`,
@@ -561,16 +669,29 @@ export class PlaywrightMeetBotSession {
           return;
         }
 
-        // 3. Check if removed or call ended
-        const callEnded =
-          /You've left the meeting|Return to home screen|You were removed from the meeting|The call ended/i.test(
-            bodyText,
-          );
-        if (callEnded) {
+        // 3. Retry pre-join configuration while still on the pre-join screen
+        if (this.status === "OPENING_MEET" && !this.joinClicked) {
+          await this.tryPreJoinStep(page);
+          if (this.joinClicked) {
+            const afterJoinText =
+              (await page.locator("body").innerText({ timeout: 400 }).catch(() => "")) || "";
+            if (LOBBY_TEXT_RE.test(afterJoinText)) {
+              await this.transitionStatus("WAITING_FOR_ADMISSION", {
+                detail: `${this.botDisplayName} waiting in Google Meet lobby for host admission`,
+              });
+              return;
+            }
+          }
+        }
+
+        // 4. Check if removed or call ended
+        if (CALL_ENDED_TEXT_RE.test(bodyText)) {
           await this.handleUnexpectedDisconnect("Google Meet call ended or bot was removed.");
         }
       } catch {
         // Ignore transient DOM evaluation errors while page navigates
+      } finally {
+        inspecting = false;
       }
     };
 
@@ -644,6 +765,7 @@ export class PlaywrightMeetBotSession {
     this.reconnectingInFlight = true;
     this.clearTimers();
     this.inCallPipelineStarted = false;
+    this.joinClicked = false;
 
     await this.stopAudioAndGemini();
     await this.cleanupBrowser();
@@ -738,8 +860,8 @@ export class PlaywrightMeetBotSession {
 
     if (clickLeaveCall && page) {
       try {
-        const leaveBtn = page.locator('[aria-label*="Leave call" i]').first();
-        if (await leaveBtn.isVisible({ timeout: 500 }).catch(() => false)) {
+        const leaveBtn = page.locator(LEAVE_CALL_SELECTOR).first();
+        if (await leaveBtn.isVisible().catch(() => false)) {
           await leaveBtn.click({ timeout: 1000 }).catch(() => {});
         }
       } catch {

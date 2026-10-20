@@ -11,7 +11,9 @@
     "test": "node --no-warnings --experimental-strip-types --import ./scripts/register.mjs --test \"tests/*.test.ts\"",
     "gen:catalog": "node --no-warnings --experimental-strip-types --import ./scripts/register.mjs scripts/gen-catalog-images.ts",
     "gen:consultation-seed": "node --no-warnings --experimental-strip-types --import ./scripts/register.mjs scripts/gen-consultation-seed.ts",
-    "bot:worker": "node --no-warnings --experimental-strip-types --import ./scripts/register.mjs services/meeting-bot/worker.ts"
+    "bot:worker": "node --no-warnings --experimental-strip-types --import ./scripts/register.mjs services/meeting-bot/worker.ts",
+    "bot:login": "node --no-warnings --experimental-strip-types --import ./scripts/register.mjs scripts/bot-join.ts --login",
+    "bot:join": "node --no-warnings --experimental-strip-types --import ./scripts/register.mjs scripts/bot-join.ts"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "0.6.0",

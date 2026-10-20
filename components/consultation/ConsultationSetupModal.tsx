@@ -6,7 +6,7 @@ import { DresslyGlass } from "@/components/shaders/DresslyGlass";
 import { DresslyGlow } from "@/components/shaders/DresslyGlow";
 import type { StartConsultationRequest } from "@/lib/api-types";
 
-const DEMO_MEET_URL = "https://meet.google.com/drs-live-bag";
+const DEMO_MEET_URL = "demo://local-consultation";
 
 export interface ConsultationSetupModalProps {
   open: boolean;
@@ -21,7 +21,7 @@ export function ConsultationSetupModal({
   open,
   busy = false,
   error = null,
-  initialMeetingUrl = DEMO_MEET_URL,
+  initialMeetingUrl = "",
   onClose,
   onStart,
 }: ConsultationSetupModalProps) {
@@ -130,7 +130,7 @@ export function ConsultationSetupModal({
                     }}
                     className="text-[11px] text-accent-soft underline decoration-accent/40 underline-offset-4 transition hover:text-ink"
                   >
-                    Use demo consultation room
+                    Use local simulated consultation (no Meet call)
                   </button>
                 </div>
 

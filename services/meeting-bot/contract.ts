@@ -16,6 +16,7 @@ export interface StartBotSessionRequest {
   botDisplayName?: string; // defaults to "Dressly AI Assistant"
   callbackUrl: string;     // e.g. http://127.0.0.1:3000/api/sessions/{id}/consultation/bot-event
   audioBackend?: "auto" | "webrtc-tap" | "pulseaudio" | "simulated";
+  headless?: boolean;
 }
 
 export interface BotSessionSnapshot {
@@ -24,6 +25,7 @@ export interface BotSessionSnapshot {
   botDisplayName: string;
   status: MeetingBotStatus;
   audioBackend: string;
+  headless: boolean;
   chunksCaptured: number;
   bytesCaptured: number;
   geminiConnected: boolean;

@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import http, { type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import path from "node:path";
 import test from "node:test";
 import { POST as postBotEvent } from "@/app/api/sessions/[id]/consultation/bot-event/route";
 import { startSessionConsultation } from "@/lib/agent/consultation-orchestrator";
@@ -20,12 +24,17 @@ import { meetingBotClient } from "@/services/meeting-bot/client";
 import {
   DEFAULT_BOT_DISPLAY_NAME,
   MEETING_BOT_SECRET_HEADER,
+  type BotWebhookEvent,
 } from "@/services/meeting-bot/contract";
 import {
   GeminiConsultationLiveStream,
   type MinimalWebSocket,
 } from "@/services/meeting-bot/gemini-stream";
-import { resolveChromiumExecutable } from "@/services/meeting-bot/playwright-bot";
+import {
+  PlaywrightMeetBotSession,
+  resolveBotProfileDir,
+  resolveChromiumExecutable,
+} from "@/services/meeting-bot/playwright-bot";
 import { createBotWorkerServer } from "@/services/meeting-bot/worker";
 
 test("resolveChromiumExecutable and resolveFfmpegExecutable locate local binaries", () => {
@@ -283,4 +292,207 @@ test("bot-event webhook route validates secret and updates consultation bot stat
   const afterLobby = await getSession(created.id);
   assert.equal(afterLobby?.consultation?.botStatus, "WAITING_FOR_ADMISSION");
   assert.equal(afterLobby?.consultation?.status, "WAITING_FOR_ADMISSION");
+});
+
+test("resolveBotProfileDir reuses shared data/bot-profile unless SingletonLock exists", () => {
+  const sharedRoot = path.resolve(process.cwd(), env.meetingBotProfileDir);
+  fs.mkdirSync(sharedRoot, { recursive: true });
+  const lockFile = path.join(sharedRoot, "SingletonLock");
+  const hadLock = fs.existsSync(lockFile);
+
+  try {
+    if (hadLock) {
+      fs.unlinkSync(lockFile);
+    }
+    const resolvedDefault = resolveBotProfileDir("sess_shared_profile_check");
+    assert.equal(resolvedDefault, sharedRoot);
+
+    fs.writeFileSync(lockFile, "locked", "utf8");
+    const resolvedFallback = resolveBotProfileDir("sess_shared_profile_check");
+    assert.equal(resolvedFallback, path.resolve(sharedRoot, "sess_shared_profile_check"));
+  } finally {
+    if (!hadLock && fs.existsSync(lockFile)) {
+      fs.unlinkSync(lockFile);
+    }
+  }
+});
+
+test("Real Chromium integration: PlaywrightMeetBotSession joins pre-join/lobby/in-call harness and captures live 16kHz PCM audio", async () => {
+  const webhookEvents: BotWebhookEvent[] = [];
+  let submittedGuestName = "";
+  let joinButtonClicked = false;
+
+  const meetHtml = `<!doctype html>
+<html>
+  <head><meta charset="utf-8" /><title>Google Meet Test Harness</title></head>
+  <body>
+    <div id="prejoin">
+      <button id="mic-btn" aria-label="Turn off microphone" data-is-muted="false">Mic</button>
+      <button id="cam-btn" aria-label="Turn off camera" data-is-muted="false">Cam</button>
+      <input id="guest-name" placeholder="Your name" value="" />
+      <button id="ask-to-join">Ask to join</button>
+    </div>
+    <div id="status-banner">Ready to join</div>
+    <script>
+      const micBtn = document.getElementById("mic-btn");
+      const camBtn = document.getElementById("cam-btn");
+      micBtn.addEventListener("click", () => {
+        micBtn.setAttribute("data-is-muted", "true");
+        micBtn.setAttribute("aria-label", "Turn on microphone");
+      });
+      camBtn.addEventListener("click", () => {
+        camBtn.setAttribute("data-is-muted", "true");
+        camBtn.setAttribute("aria-label", "Turn on camera");
+      });
+
+      document.getElementById("ask-to-join").addEventListener("click", () => {
+        const nameVal = document.getElementById("guest-name").value;
+        fetch("/join-clicked?name=" + encodeURIComponent(nameVal)).catch(() => {});
+        document.getElementById("prejoin").style.display = "none";
+        document.getElementById("status-banner").textContent =
+          "Asking to be let in... Someone in the call will let you in soon";
+
+        setTimeout(() => {
+          document.getElementById("status-banner").textContent = "In call";
+          const leaveBtn = document.createElement("button");
+          leaveBtn.id = "leave-call-btn";
+          leaveBtn.setAttribute("aria-label", "Leave call");
+          leaveBtn.textContent = "Leave call";
+          document.body.appendChild(leaveBtn);
+
+          // Generate real continuous WebAudio stream into an <audio> element via srcObject
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          const ctx = new AudioCtx();
+          const osc = ctx.createOscillator();
+          osc.type = "sine";
+          osc.frequency.value = 440;
+          const gain = ctx.createGain();
+          gain.gain.value = 0.5;
+          const dest = ctx.createMediaStreamDestination();
+          osc.connect(gain);
+          gain.connect(dest);
+          osc.start();
+          if (ctx.state === "suspended") {
+            ctx.resume().catch(() => {});
+          }
+
+          const audioEl = document.createElement("audio");
+          audioEl.autoplay = true;
+          audioEl.srcObject = dest.stream;
+          document.body.appendChild(audioEl);
+          audioEl.play().catch(() => {});
+        }, 300);
+      });
+    </script>
+  </body>
+</html>`;
+
+  const harnessServer = http.createServer((req: IncomingMessage, res: ServerResponse) => {
+    const parsedUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (req.method === "GET" && parsedUrl.pathname === "/meet-test") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(meetHtml);
+      return;
+    }
+    if (req.method === "GET" && parsedUrl.pathname === "/join-clicked") {
+      joinButtonClicked = true;
+      submittedGuestName = parsedUrl.searchParams.get("name") ?? "";
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+    if (req.method === "POST" && parsedUrl.pathname === "/webhook") {
+      const chunks: Buffer[] = [];
+      req.on("data", (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+      req.on("end", () => {
+        try {
+          const evt = JSON.parse(Buffer.concat(chunks).toString("utf8")) as BotWebhookEvent;
+          webhookEvents.push(evt);
+        } catch {
+          // Ignore malformed JSON
+        }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ ok: true }));
+      });
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  const port = await new Promise<number>((resolve, reject) => {
+    harnessServer.once("error", reject);
+    harnessServer.listen(0, "127.0.0.1", () => {
+      const addr = harnessServer.address() as AddressInfo;
+      resolve(addr.port);
+    });
+  });
+
+  const botSession = new PlaywrightMeetBotSession({
+    consultationSessionId: `real_chromium_test_${Date.now()}`,
+    meetingUrl: `http://127.0.0.1:${port}/meet-test`,
+    botDisplayName: DEFAULT_BOT_DISPLAY_NAME,
+    callbackUrl: `http://127.0.0.1:${port}/webhook`,
+    audioBackend: "webrtc-tap",
+    headless: true,
+  });
+
+  try {
+    await botSession.start();
+
+    // Poll until real Chromium transitions through WAITING_FOR_ADMISSION -> JOINED -> LISTENING
+    // and captures at least 1 full 3200-byte 16 kHz mono s16le PCM frame from WebAudio
+    const deadline = Date.now() + 15_000;
+    while (Date.now() < deadline) {
+      const snap = botSession.getSnapshot();
+      if (snap.status === "LISTENING" && snap.chunksCaptured > 0 && snap.bytesCaptured >= 3200) {
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    const finalSnap = botSession.getSnapshot();
+    assert.equal(joinButtonClicked, true, "Expected bot to click 'Ask to join'");
+    assert.equal(
+      submittedGuestName,
+      "Dressly AI Assistant",
+      "Expected bot to fill 'Dressly AI Assistant' into guest name input",
+    );
+    assert.equal(finalSnap.headless, true);
+    assert.equal(finalSnap.status, "LISTENING");
+    assert.ok(
+      finalSnap.chunksCaptured > 0,
+      `Expected chunksCaptured > 0, got ${finalSnap.chunksCaptured}`,
+    );
+    assert.ok(
+      finalSnap.bytesCaptured >= 3200,
+      `Expected bytesCaptured >= 3200, got ${finalSnap.bytesCaptured}`,
+    );
+
+    const observedStatuses = webhookEvents
+      .filter((e): e is Extract<BotWebhookEvent, { type: "bot.status" }> => e.type === "bot.status")
+      .map((e) => e.status);
+
+    assert.ok(
+      observedStatuses.includes("OPENING_MEET"),
+      `Expected OPENING_MEET in [${observedStatuses.join(", ")}]`,
+    );
+    assert.ok(
+      observedStatuses.includes("WAITING_FOR_ADMISSION"),
+      `Expected WAITING_FOR_ADMISSION in [${observedStatuses.join(", ")}]`,
+    );
+    assert.ok(
+      observedStatuses.includes("JOINED"),
+      `Expected JOINED in [${observedStatuses.join(", ")}]`,
+    );
+    assert.ok(
+      observedStatuses.includes("LISTENING"),
+      `Expected LISTENING in [${observedStatuses.join(", ")}]`,
+    );
+  } finally {
+    await botSession.stop();
+    await new Promise<void>((resolve) => harnessServer.close(() => resolve()));
+  }
+
+  assert.equal(botSession.getSnapshot().status, "STOPPED");
 });
