@@ -103,15 +103,50 @@ function getPlaywrightCacheRoots(): string[] {
 }
 
 /**
- * Resolves a local Chromium / Chrome / Edge executable across:
+ * Resolves a local Chrome / Chromium / Edge executable across:
  *   1. `env.chromiumExecutablePath` (`process.env.CHROMIUM_EXECUTABLE_PATH`) if present on disk.
- *   2. Playwright's local browser cache (`ms-playwright/chromium-*`).
- *   3. Standard system paths (Google Chrome, Chromium, Microsoft Edge).
+ *   2. Standard system paths (official Google Chrome preferred over unbranded Chromium / CfT).
+ *   3. System PATH (`google-chrome`, `chrome`, `chromium-browser`, `chromium`, `msedge`).
+ *   4. Playwright's local browser cache (`ms-playwright/chromium-*`).
  */
 export function resolveChromiumExecutable(): string | null {
   const configured = process.env.CHROMIUM_EXECUTABLE_PATH?.trim() || env.chromiumExecutablePath;
   if (configured && fs.existsSync(configured)) {
     return configured;
+  }
+
+  const systemCandidates =
+    process.platform === "win32"
+      ? [
+          "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+          "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+          "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+          "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+        ]
+      : process.platform === "darwin"
+        ? [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+          ]
+        : [
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+          ];
+
+  for (const candidate of systemCandidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const bin of ["google-chrome", "google-chrome-stable", "chrome", "chromium-browser", "chromium", "msedge"]) {
+    const found = findInSystemPath(bin);
+    if (found) {
+      return found;
+    }
   }
 
   const cacheRelativePaths =
@@ -151,40 +186,6 @@ export function resolveChromiumExecutable(): string | null {
           return candidate;
         }
       }
-    }
-  }
-
-  const systemCandidates =
-    process.platform === "win32"
-      ? [
-          "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-          "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-          "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-          "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-        ]
-      : process.platform === "darwin"
-        ? [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-          ]
-        : [
-            "/usr/bin/google-chrome",
-            "/usr/bin/google-chrome-stable",
-            "/usr/bin/chromium-browser",
-            "/usr/bin/chromium",
-          ];
-
-  for (const candidate of systemCandidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  for (const bin of ["google-chrome", "chromium-browser", "chromium", "chrome", "msedge"]) {
-    const found = findInSystemPath(bin);
-    if (found) {
-      return found;
     }
   }
 
@@ -471,7 +472,7 @@ export class PlaywrightMeetBotSession {
         executablePath,
         headless,
         args: launchArgs,
-        ignoreDefaultArgs: ["--mute-audio"],
+        ignoreDefaultArgs: ["--mute-audio", "--enable-automation"],
         env: launchEnv as Record<string, string>,
       };
 

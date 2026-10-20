@@ -1,15 +1,14 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
-import { chromium } from "playwright-core";
 import { env } from "@/lib/env";
 import {
   DEFAULT_BOT_DISPLAY_NAME,
   type BotWebhookEvent,
 } from "@/services/meeting-bot/contract";
 import {
-  CHROMIUM_LAUNCH_ARGS,
   PlaywrightMeetBotSession,
   resolveChromiumExecutable,
 } from "@/services/meeting-bot/playwright-bot";
@@ -43,44 +42,65 @@ async function readWebhookJson(req: IncomingMessage): Promise<BotWebhookEvent | 
   }
 }
 
-async function runLoginMode(): Promise<void> {
+async function runLoginMode(forceReset = false): Promise<void> {
   const executablePath = resolveChromiumExecutable();
   if (!executablePath) {
     console.error(
-      "[bot:login] Chromium executable not found. Set CHROMIUM_EXECUTABLE_PATH or install Google Chrome / Playwright Chromium.",
+      "[bot:login] Chrome executable not found. Set CHROMIUM_EXECUTABLE_PATH or install Google Chrome.",
     );
     process.exit(1);
   }
 
   const profileDir = path.resolve(process.cwd(), env.meetingBotProfileDir);
+  const nativeMarker = path.join(profileDir, ".dressly-native-chrome-profile");
+
+  // If the profile directory was previously created by Playwright's unbranded
+  // Chrome for Testing with CDP attached (which triggers Google's v3/signin/rejected),
+  // or if --reset was passed, wipe it cleanly before launching native Google Chrome.
+  if (forceReset || (fs.existsSync(profileDir) && !fs.existsSync(nativeMarker))) {
+    try {
+      fs.rmSync(profileDir, { recursive: true, force: true });
+    } catch {
+      // Ignore locked files if any
+    }
+  }
+
   fs.mkdirSync(profileDir, { recursive: true });
+  fs.writeFileSync(nativeMarker, new Date().toISOString(), "utf8");
 
   console.log("====================================================================");
   console.log(" Dressly AI Assistant — Persistent Google Account Login");
   console.log("====================================================================");
   console.log(`Browser binary : ${executablePath}`);
   console.log(`Profile dir    : ${profileDir}`);
+  console.log("Launch mode    : Native Google Chrome (no CDP / automation pipe)");
   console.log("");
   console.log("Instructions:");
   console.log(`  1. Sign into the Google account you want "${DEFAULT_BOT_DISPLAY_NAME}" to use.`);
-  console.log("  2. Verify the second tab (https://meet.google.com) shows your signed-in account.");
-  console.log("  3. Close the browser window (or press Ctrl+C here) to save the profile.");
+  console.log("     (Tip: Google Meet also allows guest join without signing in if the host admits the bot.)");
+  console.log("  2. Verify https://meet.google.com shows your signed-in account.");
+  console.log("  3. Close the Chrome window (or press Ctrl+C here) to save the profile.");
   console.log("====================================================================\n");
 
-  const context = await chromium.launchPersistentContext(profileDir, {
+  // Spawn official Google Chrome directly as a normal OS process with --user-data-dir
+  // and NO Playwright CDP debugging pipe or --enable-automation flags attached.
+  // This prevents Google Accounts from rejecting the login with `v3/signin/rejected`.
+  const child = spawn(
     executablePath,
-    headless: false,
-    args: [...CHROMIUM_LAUNCH_ARGS],
-  });
+    [
+      `--user-data-dir=${profileDir}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmeet.google.com%2F",
+      "https://meet.google.com",
+    ],
+    {
+      stdio: "ignore",
+      detached: false,
+    },
+  );
 
-  const loginPage = context.pages()[0] ?? (await context.newPage());
-  await loginPage.goto("https://accounts.google.com", { waitUntil: "domcontentloaded" });
-
-  const meetPage = await context.newPage();
-  await meetPage.goto("https://meet.google.com", { waitUntil: "domcontentloaded" });
-  await loginPage.bringToFront().catch(() => {});
-
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
     let finished = false;
     const done = () => {
       if (finished) return;
@@ -88,13 +108,34 @@ async function runLoginMode(): Promise<void> {
       resolve();
     };
 
-    context.on("close", done);
-    process.once("SIGINT", () => {
-      console.log("\n[bot:login] Closing browser and saving persistent profile...");
-      void context.close().finally(done);
+    child.once("error", (err) => {
+      if (!finished) {
+        finished = true;
+        reject(err);
+      }
     });
+
+    child.once("exit", () => {
+      done();
+    });
+
+    process.once("SIGINT", () => {
+      console.log("\n[bot:login] Closing Chrome and saving persistent profile...");
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore
+      }
+      done();
+    });
+
     process.once("SIGTERM", () => {
-      void context.close().finally(done);
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // Ignore
+      }
+      done();
     });
   });
 
@@ -195,7 +236,7 @@ async function runJoinMode(meetingUrl: string): Promise<void> {
 async function main(): Promise<void> {
   const args = process.argv.slice(2).filter((arg) => arg !== "--");
   if (args.includes("--login") || args.includes("login")) {
-    await runLoginMode();
+    await runLoginMode(args.includes("--reset"));
     return;
   }
 
