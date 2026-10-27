@@ -47,6 +47,8 @@ export interface GeminiConsultationLiveStreamOptions {
   onFinalTranscript?: (text: string) => void;
   /** Optional callback invoked when Gemini Live connection/setup state changes. */
   onStatusChange?: (connected: boolean, detail?: string) => void;
+  /** Optional callback invoked when Gemini Live server-side VAD emits voiceActivity events. */
+  onVoiceActivity?: (activityType: string, audioOffset?: string) => void;
   /** Optional callback invoked on WebSocket or protocol errors. */
   onError?: (error: Error) => void;
   /** Optional WebSocket factory for deterministic unit tests. */
@@ -65,6 +67,10 @@ interface GeminiLiveServerMessage {
     };
     turnComplete?: boolean;
     interrupted?: boolean;
+  };
+  voiceActivity?: {
+    type?: "ACTIVITY_START" | "ACTIVITY_END" | string;
+    audioOffset?: string;
   };
   goAway?: {
     timeLeft?: string;
@@ -123,6 +129,9 @@ export class GeminiConsultationLiveStream {
   private readonly partialListeners = new Set<(text: string) => void>();
   private readonly finalListeners = new Set<(text: string) => void>();
   private readonly statusListeners = new Set<(connected: boolean, detail?: string) => void>();
+  private readonly voiceActivityListeners = new Set<
+    (activityType: string, audioOffset?: string) => void
+  >();
   private readonly errorListeners = new Set<(error: Error) => void>();
 
   private ws: MinimalWebSocket | null = null;
@@ -148,6 +157,9 @@ export class GeminiConsultationLiveStream {
     }
     if (options.onStatusChange) {
       this.statusListeners.add(options.onStatusChange);
+    }
+    if (options.onVoiceActivity) {
+      this.voiceActivityListeners.add(options.onVoiceActivity);
     }
     if (options.onError) {
       this.errorListeners.add(options.onError);
@@ -188,6 +200,15 @@ export class GeminiConsultationLiveStream {
     this.statusListeners.add(callback);
     return () => {
       this.statusListeners.delete(callback);
+    };
+  }
+
+  onVoiceActivity(
+    callback: (activityType: string, audioOffset?: string) => void,
+  ): () => void {
+    this.voiceActivityListeners.add(callback);
+    return () => {
+      this.voiceActivityListeners.delete(callback);
     };
   }
 
@@ -458,6 +479,20 @@ export class GeminiConsultationLiveStream {
       this.emitStatus(true, "Gemini Live setupComplete acknowledged.");
     }
 
+    if (msg.voiceActivity?.type) {
+      const activityType = msg.voiceActivity.type;
+      const offset = msg.voiceActivity.audioOffset;
+      console.log(
+        `[GEMINI:VAD] ${activityType}${offset ? ` (offset=${offset})` : ""}`,
+      );
+      for (const listener of this.voiceActivityListeners) {
+        listener(activityType, offset);
+      }
+      if (activityType === "ACTIVITY_END" && this.turnBuffer.trim().length > 0) {
+        this.scheduleSilenceFlush(Math.min(350, this.silenceFlushMs));
+      }
+    }
+
     const content = msg.serverContent;
     if (!content) {
       return;
@@ -485,12 +520,12 @@ export class GeminiConsultationLiveStream {
     }
   }
 
-  private scheduleSilenceFlush(): void {
+  private scheduleSilenceFlush(delayMs: number = this.silenceFlushMs): void {
     this.clearSilenceTimer();
     this.silenceTimer = setTimeout(() => {
       this.silenceTimer = null;
       this.flushTurnBuffer();
-    }, this.silenceFlushMs);
+    }, delayMs);
   }
 
   private clearSilenceTimer(): void {

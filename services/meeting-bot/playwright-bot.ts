@@ -9,6 +9,7 @@ import { nowIso } from "@/lib/util/id";
 import {
   buildBrowserAudioCaptureInitScript,
   ChromeMeetAudioSource,
+  type BrowserAudioDiagnostics,
 } from "@/services/meeting-bot/audio-capture";
 import {
   SimulatedMeetAudioSource,
@@ -289,6 +290,9 @@ export class PlaywrightMeetBotSession {
   private inCallPipelineStarted = false;
   private reconnectingInFlight = false;
   private joinClicked = false;
+  private reportedAudioTracksConnected = false;
+  private reportedVoiceSignalReceived = false;
+  private reportedGeminiVadSpeech = false;
 
   constructor(req: StartBotSessionRequest) {
     this.consultationSessionId = req.consultationSessionId;
@@ -360,6 +364,9 @@ export class PlaywrightMeetBotSession {
     this.reconnectAttempts += 1;
     this.inCallPipelineStarted = false;
     this.joinClicked = false;
+    this.reportedAudioTracksConnected = false;
+    this.reportedVoiceSignalReceived = false;
+    this.reportedGeminiVadSpeech = false;
     await this.transitionStatus("RECONNECTING", {
       detail: `Reconnecting ${this.botDisplayName} to Google Meet (attempt ${this.reconnectAttempts})`,
     });
@@ -569,6 +576,9 @@ export class PlaywrightMeetBotSession {
         timeout: 30_000,
       });
 
+      await page.evaluate(buildOutgoingMediaMuteInitScript()).catch(() => {});
+      await page.evaluate(buildBrowserAudioCaptureInitScript()).catch(() => {});
+
       if (this.stopped) return;
 
       await this.tryPreJoinStep(page);
@@ -755,9 +765,79 @@ export class PlaywrightMeetBotSession {
     }
     this.telemetryTimer = setInterval(() => {
       if (this.stopped || this.status !== "LISTENING") return;
-      console.log(
-        `[BOT:TELEMETRY:${this.consultationSessionId}] chunks=${this.chunksCaptured} bytes=${this.bytesCaptured} rms=${chromeAudioSource.lastRms.toFixed(4)} peak=${chromeAudioSource.lastPeak.toFixed(4)} geminiConnected=${this.geminiConnected} geminiSent=${this.geminiStream?.chunksSent ?? 0}`,
-      );
+      void (async () => {
+        let diag: BrowserAudioDiagnostics | null = null;
+        const activePage = this.page;
+        if (activePage) {
+          try {
+            const drained = await activePage
+              .evaluate(() => {
+                const w = window as unknown as {
+                  __dresslyDrainPcmChunks?: () => string[];
+                };
+                return typeof w.__dresslyDrainPcmChunks === "function"
+                  ? w.__dresslyDrainPcmChunks()
+                  : [];
+              })
+              .catch(() => [] as string[]);
+            if (Array.isArray(drained) && drained.length > 0) {
+              for (const chunk of drained) {
+                if (typeof chunk === "string" && chunk.length > 0) {
+                  chromeAudioSource.pushBase64PcmChunk(chunk);
+                }
+              }
+            }
+
+            diag = await activePage
+              .evaluate(() => {
+                const w = window as unknown as {
+                  __dresslyGetAudioDiagnostics?: () => BrowserAudioDiagnostics | null;
+                };
+                return typeof w.__dresslyGetAudioDiagnostics === "function"
+                  ? w.__dresslyGetAudioDiagnostics()
+                  : null;
+              })
+              .catch(() => null);
+          } catch {
+            // Ignore transient page evaluation errors
+          }
+        }
+
+        if (this.stopped || this.status !== "LISTENING") return;
+
+        console.log(
+          `[BOT:TELEMETRY:${this.consultationSessionId}] chunks=${this.chunksCaptured} bytes=${this.bytesCaptured} rms=${chromeAudioSource.lastRms.toFixed(4)} peak=${chromeAudioSource.lastPeak.toFixed(4)} geminiConnected=${this.geminiConnected} geminiSent=${this.geminiStream?.chunksSent ?? 0}${
+            diag
+              ? ` browser={pcs:${diag.peerConnections},tracks:${diag.tappedTracksCount},pushed:${diag.chunksPushed},maxPeak:${(diag.maxPeak ?? 0).toFixed(4)}}`
+              : ""
+          }`,
+        );
+
+        if (!this.reportedAudioTracksConnected && diag && diag.tappedTracksCount > 0) {
+          this.reportedAudioTracksConnected = true;
+          await this.postWebhook({
+            type: "bot.status",
+            consultationSessionId: this.consultationSessionId,
+            status: "LISTENING",
+            detail: `Google Meet audio stream connected (${diag.tappedTracksCount} remote track${diag.tappedTracksCount === 1 ? "" : "s"} active)`,
+            error: null,
+            timestamp: nowIso(),
+          });
+        }
+
+        const observedPeak = Math.max(chromeAudioSource.lastPeak, diag?.maxPeak ?? 0);
+        if (!this.reportedVoiceSignalReceived && observedPeak > 0.005) {
+          this.reportedVoiceSignalReceived = true;
+          await this.postWebhook({
+            type: "bot.status",
+            consultationSessionId: this.consultationSessionId,
+            status: "LISTENING",
+            detail: `Voice signal received from meeting (peak=${observedPeak.toFixed(3)})`,
+            error: null,
+            timestamp: nowIso(),
+          });
+        }
+      })();
     }, 2000);
 
     if (!env.geminiApiKey && !env.mockExternalApis) {
@@ -811,6 +891,27 @@ export class PlaywrightMeetBotSession {
             });
           }
         },
+        onVoiceActivity: (type, audioOffset) => {
+          console.log(
+            `[BOT:GEMINI:VAD:${this.consultationSessionId}] type=${type}${audioOffset ? ` offset=${audioOffset}` : ""}`,
+          );
+          if (
+            type === "ACTIVITY_START" &&
+            !this.reportedGeminiVadSpeech &&
+            this.status === "LISTENING" &&
+            !this.stopped
+          ) {
+            this.reportedGeminiVadSpeech = true;
+            void this.postWebhook({
+              type: "bot.status",
+              consultationSessionId: this.consultationSessionId,
+              status: "LISTENING",
+              detail: "Gemini detected speech in meeting",
+              error: null,
+              timestamp: nowIso(),
+            });
+          }
+        },
         onError: (err) => {
           this.lastError = err.message;
           void this.postWebhook({
@@ -848,6 +949,9 @@ export class PlaywrightMeetBotSession {
     this.clearTimers();
     this.inCallPipelineStarted = false;
     this.joinClicked = false;
+    this.reportedAudioTracksConnected = false;
+    this.reportedVoiceSignalReceived = false;
+    this.reportedGeminiVadSpeech = false;
 
     await this.stopAudioAndGemini();
     await this.cleanupBrowser();

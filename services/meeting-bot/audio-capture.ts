@@ -36,6 +36,14 @@ import {
 
 export type ResolvedAudioBackend = "webrtc-tap" | "pulseaudio";
 
+export interface BrowserAudioDiagnostics {
+  installed: boolean;
+  peerConnections: number;
+  tappedTracksCount: number;
+  chunksPushed: number;
+  maxPeak: number;
+}
+
 export interface MinimalPlaywrightPage {
   exposeBinding(
     name: string,
@@ -196,17 +204,26 @@ export function buildBrowserAudioCaptureInitScript(): string {
 
   const TARGET_SAMPLE_RATE = ${PCM_SAMPLE_RATE};
   const SAMPLES_PER_FRAME = ${PCM_SAMPLES_PER_FRAME};
+  const MAX_TRACK_QUEUE_SAMPLES = 16000;
+  const MAX_PENDING_DRAIN_CHUNKS = 50;
 
   const tappedTrackIds = new Set();
   const webAudioConnectedTrackIds = new Set();
   const tappedElements = new WeakSet();
+  const createdMediaElements = new Set();
   const activePeerConnections = new Set();
   const activeSourceNodes = [];
   const activeKeepAliveElements = [];
+  const trackSampleQueues = new Map();
+  const fallbackBuffer = [];
+  trackSampleQueues.set("__webaudio_fallback__", fallbackBuffer);
+
+  const pendingDrainChunks = [];
+  let totalChunksPushed = 0;
+  let maxPeakObserved = 0;
   let audioCtx = null;
   let sinkNode = null;
   let workletReadyPromise = null;
-  let fallbackBuffer = [];
   let trackProcessorFramesReceived = 0;
 
   function logToNode(message) {
@@ -238,14 +255,25 @@ export function buildBrowserAudioCaptureInitScript(): string {
 
   function pushBase64ToNode(base64Pcm) {
     if (!base64Pcm || typeof base64Pcm !== "string") return;
+    totalChunksPushed += 1;
+    let delivered = false;
     try {
       if (typeof window.__dresslyPushAudioChunk === "function") {
         window.__dresslyPushAudioChunk(base64Pcm);
+        delivered = true;
       } else if (typeof window.__dresslyAudioChunk === "function") {
         window.__dresslyAudioChunk(base64Pcm);
+        delivered = true;
       }
     } catch {
-      // Ignore transient binding errors during page navigation
+      delivered = false;
+    }
+
+    if (!delivered) {
+      if (pendingDrainChunks.length >= MAX_PENDING_DRAIN_CHUNKS) {
+        pendingDrainChunks.shift();
+      }
+      pendingDrainChunks.push(base64Pcm);
     }
   }
 
@@ -255,14 +283,66 @@ export function buildBrowserAudioCaptureInitScript(): string {
     return true;
   };
 
+  window.__dresslyDrainPcmChunks = function __dresslyDrainPcmChunks() {
+    if (pendingDrainChunks.length === 0) return [];
+    return pendingDrainChunks.splice(0, pendingDrainChunks.length);
+  };
+
+  window.__dresslyGetAudioDiagnostics = function __dresslyGetAudioDiagnostics() {
+    return {
+      installed: true,
+      peerConnections: activePeerConnections.size,
+      tappedTracksCount: tappedTrackIds.size,
+      chunksPushed: totalChunksPushed,
+      maxPeak: maxPeakObserved,
+    };
+  };
+
+  function enqueueTrackSample(trackId, sample) {
+    let queue = trackSampleQueues.get(trackId);
+    if (!queue) {
+      queue = [];
+      trackSampleQueues.set(trackId, queue);
+    }
+    if (queue.length >= MAX_TRACK_QUEUE_SAMPLES) {
+      queue.splice(0, queue.length - (MAX_TRACK_QUEUE_SAMPLES - 1));
+    }
+    queue.push(sample);
+  }
+
   function float32ToPcm16Base64(samples) {
     const pcm = new Int16Array(samples.length);
     for (let i = 0; i < samples.length; i += 1) {
-      const clamped = Math.max(-1, Math.min(1, samples[i] || 0));
+      const raw = samples[i] || 0;
+      const abs = Math.abs(raw);
+      if (abs > maxPeakObserved) maxPeakObserved = abs;
+      const clamped = Math.max(-1, Math.min(1, raw));
       pcm[i] = clamped < 0 ? Math.round(clamped * 0x8000) : Math.round(clamped * 0x7fff);
     }
     return uint8ToBase64(new Uint8Array(pcm.buffer));
   }
+
+  // Single 100ms (1600 samples at 16 kHz) Master Audio Mixer & Comfort-Silence Clock
+  setInterval(() => {
+    try {
+      if (tappedTrackIds.size === 0 && fallbackBuffer.length === 0) return;
+
+      const mixed = new Float32Array(SAMPLES_PER_FRAME);
+      for (const [, queue] of trackSampleQueues.entries()) {
+        if (queue && queue.length > 0) {
+          const takeCount = Math.min(SAMPLES_PER_FRAME, queue.length);
+          for (let i = 0; i < takeCount; i += 1) {
+            mixed[i] = Math.max(-1, Math.min(1, mixed[i] + (queue[i] || 0)));
+          }
+          queue.splice(0, takeCount);
+        }
+      }
+
+      pushBase64ToNode(float32ToPcm16Base64(mixed));
+    } catch {
+      // Ignore transient master mixer errors
+    }
+  }, 100);
 
   function ensureAudioPipeline() {
     if (workletReadyPromise) return workletReadyPromise;
@@ -343,7 +423,13 @@ export function buildBrowserAudioCaptureInitScript(): string {
           workletNode.port.onmessage = (evt) => {
             if (trackProcessorFramesReceived > 0) return;
             if (evt && evt.data) {
-              pushBase64ToNode(uint8ToBase64(new Uint8Array(evt.data)));
+              const pcm16 = new Int16Array(evt.data);
+              for (let i = 0; i < pcm16.length; i += 1) {
+                const s = (pcm16[i] || 0) / 0x8000;
+                const abs = Math.abs(s);
+                if (abs > maxPeakObserved) maxPeakObserved = abs;
+                enqueueTrackSample("__webaudio_fallback__", s);
+              }
             }
           };
           const silentGain = audioCtx.createGain();
@@ -377,20 +463,18 @@ export function buildBrowserAudioCaptureInitScript(): string {
           if (!inputBuffer || inputBuffer.numberOfChannels < 1) return;
           const ch0 = inputBuffer.getChannelData(0);
           for (let i = 0; i < ch0.length; i += 1) {
-            sum += ch0[i];
+            const sample = ch0[i] || 0;
+            const abs = Math.abs(sample);
+            if (abs > maxPeakObserved) maxPeakObserved = abs;
+            sum += sample;
             count += 1;
             acc += 1;
             if (acc >= ratio) {
               acc -= ratio;
-              fallbackBuffer.push(sum / count);
+              enqueueTrackSample("__webaudio_fallback__", sum / count);
               sum = 0;
               count = 0;
             }
-          }
-          while (fallbackBuffer.length >= SAMPLES_PER_FRAME) {
-            const frame = fallbackBuffer.slice(0, SAMPLES_PER_FRAME);
-            fallbackBuffer = fallbackBuffer.slice(SAMPLES_PER_FRAME);
-            pushBase64ToNode(float32ToPcm16Base64(frame));
           }
         };
 
@@ -432,6 +516,9 @@ export function buildBrowserAudioCaptureInitScript(): string {
   async function startTrackProcessorCapture(track) {
     let loggedFirstFrame = false;
     let loggedFirstSignal = false;
+    if (!trackSampleQueues.has(track.id)) {
+      trackSampleQueues.set(track.id, []);
+    }
 
     try {
       const processor = new window.MediaStreamTrackProcessor({ track });
@@ -440,7 +527,6 @@ export function buildBrowserAudioCaptureInitScript(): string {
       let acc = 0;
       let sum = 0;
       let count = 0;
-      let sampleQueue = [];
 
       while (true) {
         const result = await reader.read();
@@ -514,10 +600,14 @@ export function buildBrowserAudioCaptureInitScript(): string {
                 acc += 1;
                 if (acc >= ratio) {
                   acc -= ratio;
-                  sampleQueue.push(sum / count);
+                  enqueueTrackSample(track.id, sum / count);
                   sum = 0;
                   count = 0;
                 }
+              }
+
+              if (framePeak > maxPeakObserved) {
+                maxPeakObserved = framePeak;
               }
 
               if (!loggedFirstSignal && framePeak > 0.002) {
@@ -528,12 +618,6 @@ export function buildBrowserAudioCaptureInitScript(): string {
                     " peak=" +
                     framePeak.toFixed(4),
                 );
-              }
-
-              while (sampleQueue.length >= SAMPLES_PER_FRAME) {
-                const frameSamples = sampleQueue.slice(0, SAMPLES_PER_FRAME);
-                sampleQueue = sampleQueue.slice(SAMPLES_PER_FRAME);
-                pushBase64ToNode(float32ToPcm16Base64(frameSamples));
               }
             }
           }
@@ -559,6 +643,9 @@ export function buildBrowserAudioCaptureInitScript(): string {
   function tapRemoteAudioTrack(track, sourceLabel) {
     if (!track || track.kind !== "audio" || tappedTrackIds.has(track.id)) return;
     tappedTrackIds.add(track.id);
+    if (!trackSampleQueues.has(track.id)) {
+      trackSampleQueues.set(track.id, []);
+    }
 
     logToNode(
       "Discovered remote audio track id=" +
@@ -632,6 +719,13 @@ export function buildBrowserAudioCaptureInitScript(): string {
       listener,
       options,
     ) {
+      try {
+        if (this && !activePeerConnections.has(this)) {
+          activePeerConnections.add(this);
+        }
+      } catch {
+        // Ignore peer connection tracking errors
+      }
       if (type === "track") {
         origAddEventListener.call(
           this,
@@ -664,6 +758,13 @@ export function buildBrowserAudioCaptureInitScript(): string {
           return ontrackDescriptor.get ? ontrackDescriptor.get.call(this) : null;
         },
         set(handler) {
+          try {
+            if (this && !activePeerConnections.has(this)) {
+              activePeerConnections.add(this);
+            }
+          } catch {
+            // Ignore peer connection tracking errors
+          }
           const wrapped = (event) => {
             if (event && event.track && event.track.kind === "audio") {
               tapRemoteAudioTrack(event.track, "RTCPeerConnection.ontrack");
@@ -685,6 +786,13 @@ export function buildBrowserAudioCaptureInitScript(): string {
     const origGetReceivers = NativeRTCPeerConnection.prototype.getReceivers;
     if (typeof origGetReceivers === "function") {
       NativeRTCPeerConnection.prototype.getReceivers = function patchedGetReceivers() {
+        try {
+          if (this && !activePeerConnections.has(this)) {
+            activePeerConnections.add(this);
+          }
+        } catch {
+          // Ignore peer connection tracking errors
+        }
         const receivers = origGetReceivers.apply(this, arguments);
         if (Array.isArray(receivers)) {
           for (const receiver of receivers) {
@@ -695,6 +803,29 @@ export function buildBrowserAudioCaptureInitScript(): string {
         }
         return receivers;
       };
+    }
+
+    for (const methodName of ["setRemoteDescription", "addIceCandidate", "getStats"]) {
+      const origMethod = NativeRTCPeerConnection.prototype[methodName];
+      if (typeof origMethod === "function") {
+        NativeRTCPeerConnection.prototype[methodName] = function patchedPeerConnectionMethod() {
+          try {
+            if (this && !activePeerConnections.has(this)) {
+              activePeerConnections.add(this);
+              logToNode(
+                "RTCPeerConnection discovered via " +
+                  methodName +
+                  " (total=" +
+                  activePeerConnections.size +
+                  ")",
+              );
+            }
+          } catch {
+            // Ignore peer connection tracking errors
+          }
+          return origMethod.apply(this, arguments);
+        };
+      }
     }
 
     const ProxiedRTCPeerConnection = new Proxy(NativeRTCPeerConnection, {
@@ -711,7 +842,46 @@ export function buildBrowserAudioCaptureInitScript(): string {
     }
   }
 
-  // 2. Hook HTMLMediaElement.prototype.srcObject, HTMLMediaElement.prototype.play, and window.Audio
+  // 2. Hook AudioContext.prototype.createMediaStreamSource (and webkitAudioContext)
+  const AudioContextCtors = [window.AudioContext, window.webkitAudioContext].filter(Boolean);
+  const patchedAudioContextProtos = new Set();
+  for (const Ctor of AudioContextCtors) {
+    if (Ctor && Ctor.prototype && !patchedAudioContextProtos.has(Ctor.prototype)) {
+      patchedAudioContextProtos.add(Ctor.prototype);
+      const origCreateMediaStreamSource = Ctor.prototype.createMediaStreamSource;
+      if (typeof origCreateMediaStreamSource === "function") {
+        Ctor.prototype.createMediaStreamSource = function patchedCreateMediaStreamSource(stream) {
+          try {
+            if (stream) {
+              inspectMediaStream(stream, "AudioContext.createMediaStreamSource");
+            }
+          } catch {
+            // Ignore stream inspection errors
+          }
+          return origCreateMediaStreamSource.apply(this, arguments);
+        };
+      }
+    }
+  }
+
+  // 3. Hook document.createElement to track detached <audio> and <video> elements
+  if (typeof document !== "undefined" && typeof document.createElement === "function") {
+    const origCreateElement = document.createElement;
+    document.createElement = function patchedCreateElement(tagName) {
+      const el = origCreateElement.apply(this, arguments);
+      try {
+        const lower = String(tagName || "").toLowerCase();
+        if (lower === "audio" || lower === "video") {
+          createdMediaElements.add(el);
+        }
+      } catch {
+        // Ignore element tracking errors
+      }
+      return el;
+    };
+  }
+
+  // 4. Hook HTMLMediaElement.prototype.srcObject, HTMLMediaElement.prototype.play, and window.Audio
   if (typeof HTMLMediaElement !== "undefined" && HTMLMediaElement.prototype) {
     const srcObjectDescriptor = Object.getOwnPropertyDescriptor(
       HTMLMediaElement.prototype,
@@ -762,6 +932,7 @@ export function buildBrowserAudioCaptureInitScript(): string {
       construct(target, args, newTarget) {
         const audioEl = Reflect.construct(target, args, newTarget);
         try {
+          createdMediaElements.add(audioEl);
           audioEl.addEventListener("loadedmetadata", () => {
             if (audioEl.srcObject && typeof audioEl.srcObject.getAudioTracks === "function") {
               inspectMediaStream(audioEl.srcObject, "Audio.loadedmetadata(srcObject)");
@@ -778,7 +949,7 @@ export function buildBrowserAudioCaptureInitScript(): string {
     });
   }
 
-  // 3. Periodic 1000ms scanner for active RTCPeerConnections, DOM media elements, and AudioContext resume
+  // 5. Periodic 1000ms scanner for active RTCPeerConnections, created/DOM media elements, and AudioContext resume
   setInterval(() => {
     try {
       if (audioCtx && audioCtx.state === "suspended") {
@@ -804,6 +975,12 @@ export function buildBrowserAudioCaptureInitScript(): string {
               }
             }
           }
+        }
+      }
+
+      for (const el of Array.from(createdMediaElements)) {
+        if (!tappedElements.has(el) && el && el.srcObject && typeof el.srcObject.getAudioTracks === "function") {
+          inspectMediaStream(el.srcObject, "scanner:createdMediaElements");
         }
       }
 
