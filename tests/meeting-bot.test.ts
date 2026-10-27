@@ -9,6 +9,7 @@ import { startSessionConsultation } from "@/lib/agent/consultation-orchestrator"
 import { env, loadDotEnvFiles } from "@/lib/env";
 import { createSession, getSession } from "@/lib/session/store";
 import {
+  buildBrowserAudioCaptureInitScript,
   ChromeMeetAudioSource,
   resolveFfmpegExecutable,
 } from "@/services/meeting-bot/audio-capture";
@@ -127,13 +128,15 @@ test("GeminiConsultationLiveStream sends setup frame, streams 16kHz PCM, and emi
 
   const partials: string[] = [];
   const finals: string[] = [];
+  const vadEvents: Array<{ type: string; offset?: string }> = [];
 
   const stream = new GeminiConsultationLiveStream({
     apiKey: "test-gemini-key",
     model: "gemini-3.8-live",
-    silenceFlushMs: 80,
+    silenceFlushMs: 1400,
     onPartialTranscript: (t) => partials.push(t),
     onFinalTranscript: (t) => finals.push(t),
+    onVoiceActivity: (type, offset) => vadEvents.push({ type, offset }),
     webSocketFactory: () => {
       const sock: MinimalWebSocket = {
         readyState: 1,
@@ -193,6 +196,41 @@ test("GeminiConsultationLiveStream sends setup frame, streams 16kHz PCM, and emi
 
   assert.ok(partials.length >= 2);
   assert.deepEqual(finals, ["Can we make the hardware gold?"]);
+
+  // Simulate ACTIVITY_START -> partial inputTranscription -> ACTIVITY_END fast 350ms flush
+  activeSocket!.onmessage?.({
+    data: JSON.stringify({
+      voiceActivity: { type: "ACTIVITY_START", audioOffset: "1.20s" },
+    }),
+  });
+  activeSocket!.onmessage?.({
+    data: JSON.stringify({
+      serverContent: {
+        inputTranscription: { text: "What about a burgundy lining?" },
+      },
+    }),
+  });
+  activeSocket!.onmessage?.({
+    data: JSON.stringify({
+      voiceActivity: { type: "ACTIVITY_END", audioOffset: "3.40s" },
+    }),
+  });
+
+  await new Promise((r) => setTimeout(r, 420));
+  assert.deepEqual(vadEvents, [
+    { type: "ACTIVITY_START", offset: "1.20s" },
+    { type: "ACTIVITY_END", offset: "3.40s" },
+  ]);
+  assert.deepEqual(finals, [
+    "Can we make the hardware gold?",
+    "What about a burgundy lining?",
+  ]);
+
+  const script = buildBrowserAudioCaptureInitScript();
+  assert.ok(script.includes("trackSampleQueues"));
+  assert.ok(script.includes("__dresslyGetAudioDiagnostics"));
+  assert.ok(script.includes("__dresslyDrainPcmChunks"));
+  assert.ok(script.includes("createMediaStreamSource"));
 
   await stream.stop();
 });
