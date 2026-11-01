@@ -47,7 +47,22 @@ export const CHROMIUM_LAUNCH_ARGS = [
   "--disable-sync",
   "--disable-default-apps",
   "--renderer-process-limit=2",
+  "--disable-background-timer-throttling",
+  "--disable-backgrounding-occluded-windows",
+  "--disable-renderer-backgrounding",
 ] as const;
+
+export function chromiumAudioOptions(backend: "webrtc-tap" | "pulseaudio") {
+  // Mute hardware output, not the incoming WebRTC tracks. PulseAudio instead
+  // needs Chromium's output to reach the isolated virtual sink for capture.
+  return {
+    args: backend === "webrtc-tap" ? ["--mute-audio"] : [],
+    // Playwright filters custom args too, so never exclude the WebRTC mute flag.
+    ignoreDefaultArgs: backend === "pulseaudio"
+      ? ["--enable-automation", "--mute-audio"]
+      : ["--enable-automation"],
+  };
+}
 
 const POLL_INTERVAL_MS = 1000;
 const MAX_RECONNECT_ATTEMPTS = 0;
@@ -484,6 +499,8 @@ export class PlaywrightMeetBotSession {
             : "auto",
     });
     this.effectiveAudioBackend = chromeAudioSource.backend;
+    const audioOptions = chromiumAudioOptions(chromeAudioSource.backend);
+    launchArgs.push(...audioOptions.args);
     this.audioSource = chromeAudioSource;
     this.attachChunkCounter(chromeAudioSource);
 
@@ -499,7 +516,7 @@ export class PlaywrightMeetBotSession {
         executablePath,
         headless,
         args: launchArgs,
-        ignoreDefaultArgs: ["--mute-audio", "--enable-automation"],
+        ignoreDefaultArgs: audioOptions.ignoreDefaultArgs,
         env: launchEnv as Record<string, string>,
       };
 

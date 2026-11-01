@@ -57,6 +57,23 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 - [x] **C5.2** Fix `.env.local` loading in standalone `bot:worker` / `bot:join` processes (`lib/env.ts` & `package.json`), upgrade `buildBrowserAudioCaptureInitScript` (`services/meeting-bot/audio-capture.ts`) to use Chromium's native `MediaStreamTrackProcessor` (bypassing Meet CSP/TrustedTypes and `AudioContext` sample-rate mismatch) plus native-rate `AudioContext` fallback, prevent auto-reopening Chrome windows when closed manually, and add rich real-time diagnostic logging (`[BOT:BROWSER]`, `[BOT:TELEMETRY]` RMS/peak levels, `[GEMINI:WS]`, `[GEMINI:TRANSCRIPT]`) across `audio-capture.ts`, `gemini-stream.ts`, `playwright-bot.ts`, `worker.ts`, and `bot-event/route.ts`.
   - Route: `delegated` (writer trigger: touches 6 files). (`npm run typecheck` clean; `npm test` 63/63 passing, 0 Chrome windows opened during tests). RDD: `disabled/unmanaged`.
 
+### C5.3 — Echo and intermittent listening regression (2026-11-01)
+
+- [ ] **C5.3** Silence the WebRTC bot's speaker output and recover audio capture independently for each remote track, with regression tests and isolated Chromium audio verification.
+  - Authorized scope: user's request to fix severe echo and intermittent listening in Live consultation; no remote execution, authenticated Meet access, deployment, push, or PR.
+  - Route: `delegated`; mapping/preparation trigger (4+ relevant files) completed by `explore_audio`; writer trigger (capture, bot launcher, behavioral tests).
+  - Evidence: global `trackProcessorFramesReceived` permanently suppresses every WebAudio fallback after any processor frame, including failed copies; Chromium output is unmuted and auxiliary audio players also render sound.
+  - Acceptance: WebRTC capture retains nonzero PCM with bot output muted; each track can fall back after processor error/end/stall without duplicating audio; ended tracks release resources; PulseAudio output remains available to its virtual sink.
+  - TDD: off, inherited explicit feature configuration above. Runner: `npm test`; checks: focused audio tests, `npm run typecheck`, full `npm test`, `npm run build`, isolated local Chromium test with temporary profile and no external meeting.
+  - RDD: `disabled/unmanaged`, reconfirmed `gentle-ai review mode status` reports off/global.
+  - Delivery: `ask-on-risk`; chain strategy `feature-branch-chain` explicitly selected by user. Forecast 300–450 authored additions + deletions for this recovery unit. Slice: C5.3 work-unit commit(s) based on `21729d3b31c70fb2cb6397aae80e4d9c193c2ea8` on `feat/dressly-mvp`; no PR requested or created. Existing completed work is preserved.
+  - Rollback boundary: C5.3 changes to capture routing, Chromium launch audio flags, and accompanying tests/documentation; preserve prior consultation behavior outside this fix.
+  - Engram mirror: PENDING (no memory tools available); local document is the recovery source.
+  - Verification: full `npm test` with temporary `MEETING_BOT_PROFILE_DIR`: 77 tests, 74 pass, 0 fail, 3 opt-in skips. `npm run typecheck` and `git diff --check` passed. Focused `RUN_AUDIO_CHROMIUM_TEST=1 node --no-warnings --experimental-strip-types --import ./scripts/register.mjs --test tests/meeting-audio-capture.test.ts`: 13/13 passed, including local Chromium WebRTC loopback with muted output; browser logs confirmed non-silent MediaStreamTrackProcessor and forced WebAudio fallback separately. Chromium used disposable profiles, no STUN or external meeting.
+  - Launch verification: production and Chromium tests share `chromiumAudioOptions`; `ignoreDefaultArgs` removes `--mute-audio` only for PulseAudio. Final Chromium 2/2 rerun also checked `chrome://version` for the effective mute flag. Final typecheck passed.
+  - Historical checks: initial test harness parameter-property syntax and three test-only type errors failed, then were corrected and rerun successfully. One full-suite repetition reported 73 pass/1 fail with truncated diagnostics; the final repetition passed 74/74 executed tests. The older opt-in session/join Chromium E2E was skipped; new isolated audio tests were run explicitly. Real Meet/acoustic and remote Gemini checks remain pending; no live call access was authorized.
+  - Commit/build: first build deliberately cancelled after correcting launch options; final production build is in progress. Next: record build result and work-unit commit. Engram remains unavailable.
+
 ## Acceptance Criteria (Phase 1)
 
 - Starting a consultation requires explicit listening consent and accepts a Google Meet URL (or new Meet creation helper) with external Picture-in-Picture guidance (`Open Meet`, `Copy Meet Link`).

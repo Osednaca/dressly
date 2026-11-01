@@ -206,25 +206,35 @@ export function buildBrowserAudioCaptureInitScript(): string {
   const SAMPLES_PER_FRAME = ${PCM_SAMPLES_PER_FRAME};
   const MAX_TRACK_QUEUE_SAMPLES = 16000;
   const MAX_PENDING_DRAIN_CHUNKS = 50;
+  const PROCESSOR_STALL_MS = 300;
 
   const tappedTrackIds = new Set();
-  const webAudioConnectedTrackIds = new Set();
   const tappedElements = new WeakSet();
   const createdMediaElements = new Set();
   const activePeerConnections = new Set();
-  const activeSourceNodes = [];
-  const activeKeepAliveElements = [];
   const trackSampleQueues = new Map();
-  const fallbackBuffer = [];
-  trackSampleQueues.set("__webaudio_fallback__", fallbackBuffer);
 
   const pendingDrainChunks = [];
   let totalChunksPushed = 0;
   let maxPeakObserved = 0;
   let audioCtx = null;
-  let sinkNode = null;
   let workletReadyPromise = null;
-  let trackProcessorFramesReceived = 0;
+
+  function selectRoute(state, route) {
+    if (state.ended) return false;
+    if (state.route !== route) {
+      trackSampleQueues.get(state.track.id).length = 0;
+      state.route = route;
+    }
+    return true;
+  }
+
+  function acceptFallback(state) {
+    // A stalled decoder must not silence this track or another participant.
+    // selectRoute clears queued samples when switching to avoid replaying audio.
+    if (state.processorActive && Date.now() - state.lastFrameAt < PROCESSOR_STALL_MS) return false;
+    return selectRoute(state, "webaudio");
+  }
 
   function logToNode(message) {
     try {
@@ -325,7 +335,7 @@ export function buildBrowserAudioCaptureInitScript(): string {
   // Single 100ms (1600 samples at 16 kHz) Master Audio Mixer & Comfort-Silence Clock
   setInterval(() => {
     try {
-      if (tappedTrackIds.size === 0 && fallbackBuffer.length === 0) return;
+      if (tappedTrackIds.size === 0) return;
 
       const mixed = new Float32Array(SAMPLES_PER_FRAME);
       for (const [, queue] of trackSampleQueues.entries()) {
@@ -419,38 +429,37 @@ export function buildBrowserAudioCaptureInitScript(): string {
           } finally {
             URL.revokeObjectURL(blobUrl);
           }
-          const workletNode = new AudioWorkletNode(audioCtx, "dressly-meet-pcm-worklet");
-          workletNode.port.onmessage = (evt) => {
-            if (trackProcessorFramesReceived > 0) return;
-            if (evt && evt.data) {
-              const pcm16 = new Int16Array(evt.data);
-              for (let i = 0; i < pcm16.length; i += 1) {
-                const s = (pcm16[i] || 0) / 0x8000;
-                const abs = Math.abs(s);
-                if (abs > maxPeakObserved) maxPeakObserved = abs;
-                enqueueTrackSample("__webaudio_fallback__", s);
-              }
-            }
-          };
-          const silentGain = audioCtx.createGain();
-          silentGain.gain.value = 0.0001;
-          workletNode.connect(silentGain);
-          silentGain.connect(audioCtx.destination);
-          sinkNode = workletNode;
-          logToNode(
-            "WebAudio AudioWorkletNode active (ratio=" +
-              (audioCtx.sampleRate / TARGET_SAMPLE_RATE).toFixed(2) +
-              ")",
-          );
-          return sinkNode;
+          return true;
         } catch {
-          logToNode(
-            "AudioWorklet blocked by page CSP/TrustedTypes; falling back to ScriptProcessorNode",
-          );
+          logToNode("AudioWorklet unavailable; using ScriptProcessorNode");
         }
       }
+      return false;
+    })();
+    return workletReadyPromise;
+  }
 
-      if (typeof audioCtx.createScriptProcessor === "function") {
+  async function connectTrackToWebAudio(state) {
+    try {
+      const useWorklet = await ensureAudioPipeline();
+      if (state.ended || !audioCtx) return;
+      let node;
+      if (useWorklet) {
+        const workletNode = new AudioWorkletNode(audioCtx, "dressly-meet-pcm-worklet");
+        workletNode.port.onmessage = (evt) => {
+          if (!acceptFallback(state)) return;
+          if (evt && evt.data) {
+            const pcm16 = new Int16Array(evt.data);
+            for (let i = 0; i < pcm16.length; i += 1) {
+              const s = (pcm16[i] || 0) / 0x8000;
+              const abs = Math.abs(s);
+              if (abs > maxPeakObserved) maxPeakObserved = abs;
+              enqueueTrackSample(state.track.id, s);
+            }
+          }
+        };
+        node = workletNode;
+      } else if (typeof audioCtx.createScriptProcessor === "function") {
         const processor = audioCtx.createScriptProcessor(2048, 1, 1);
         const ratio = (audioCtx.sampleRate || TARGET_SAMPLE_RATE) / TARGET_SAMPLE_RATE;
         let acc = 0;
@@ -458,7 +467,10 @@ export function buildBrowserAudioCaptureInitScript(): string {
         let count = 0;
 
         processor.onaudioprocess = (event) => {
-          if (trackProcessorFramesReceived > 0) return;
+          if (!acceptFallback(state)) {
+            acc = sum = count = 0;
+            return;
+          }
           const inputBuffer = event.inputBuffer;
           if (!inputBuffer || inputBuffer.numberOfChannels < 1) return;
           const ch0 = inputBuffer.getChannelData(0);
@@ -471,49 +483,30 @@ export function buildBrowserAudioCaptureInitScript(): string {
             acc += 1;
             if (acc >= ratio) {
               acc -= ratio;
-              enqueueTrackSample("__webaudio_fallback__", sum / count);
+              enqueueTrackSample(state.track.id, sum / count);
               sum = 0;
               count = 0;
             }
           }
         };
 
-        const silentGain = audioCtx.createGain();
-        silentGain.gain.value = 0.0001;
-        processor.connect(silentGain);
-        silentGain.connect(audioCtx.destination);
-        sinkNode = processor;
-        logToNode(
-          "WebAudio ScriptProcessorNode active (sampleRate=" + audioCtx.sampleRate + ")",
-        );
+        node = processor;
       }
-
-      return sinkNode;
-    })();
-
-    return workletReadyPromise;
+      if (!node) return;
+      const silentGain = audioCtx.createGain();
+      silentGain.gain.value = 0;
+      node.connect(silentGain);
+      silentGain.connect(audioCtx.destination);
+      const source = audioCtx.createMediaStreamSource(new MediaStream([state.track]));
+      source.connect(node);
+      state.nodes = [source, node, silentGain];
+    } catch (err) {
+      logToNode("WebAudio fallback error: " + String(err));
+    }
   }
 
-  function connectTrackToWebAudio(track) {
-    if (!track || webAudioConnectedTrackIds.has(track.id)) return;
-    webAudioConnectedTrackIds.add(track.id);
-
-    ensureAudioPipeline()
-      .then((node) => {
-        if (!node || !audioCtx) return;
-        if (audioCtx.state === "suspended") {
-          audioCtx.resume().catch(() => {});
-        }
-        const stream = new MediaStream([track]);
-        const source = audioCtx.createMediaStreamSource(stream);
-        activeSourceNodes.push(source);
-        source.connect(node);
-        logToNode("Connected track id=" + track.id + " to WebAudio fallback pipeline");
-      })
-      .catch(() => {});
-  }
-
-  async function startTrackProcessorCapture(track) {
+  async function startTrackProcessorCapture(state) {
+    const track = state.track;
     let loggedFirstFrame = false;
     let loggedFirstSignal = false;
     if (!trackSampleQueues.has(track.id)) {
@@ -523,17 +516,17 @@ export function buildBrowserAudioCaptureInitScript(): string {
     try {
       const processor = new window.MediaStreamTrackProcessor({ track });
       const reader = processor.readable.getReader();
+      state.reader = reader;
       let ratio = 48000 / TARGET_SAMPLE_RATE;
       let acc = 0;
       let sum = 0;
       let count = 0;
 
-      while (true) {
+      while (!state.ended) {
         const result = await reader.read();
         if (result.done || !result.value) break;
         const audioData = result.value;
         try {
-          trackProcessorFramesReceived += 1;
           const srcRate = audioData.sampleRate || 48000;
           const frames = audioData.numberOfFrames || 0;
           const channels = audioData.numberOfChannels || 1;
@@ -590,6 +583,10 @@ export function buildBrowserAudioCaptureInitScript(): string {
             }
 
             if (copied) {
+              if (state.route !== "processor") acc = sum = count = 0;
+              if (!selectRoute(state, "processor")) break;
+              state.processorActive = true;
+              state.lastFrameAt = Date.now();
               let framePeak = 0;
               for (let i = 0; i < frames; i += 1) {
                 const s = floatBuf[i] || 0;
@@ -619,6 +616,8 @@ export function buildBrowserAudioCaptureInitScript(): string {
                     framePeak.toFixed(4),
                 );
               }
+            } else {
+              throw new Error("Unsupported AudioData layout");
             }
           }
         } finally {
@@ -637,12 +636,24 @@ export function buildBrowserAudioCaptureInitScript(): string {
           (err && err.message ? err.message : String(err)) +
           "); using WebAudio fallback",
       );
+    } finally {
+      state.processorActive = false;
+      if (!state.ended) selectRoute(state, "webaudio");
+      if (state.reader) {
+        await state.reader.cancel().catch(() => {});
+        state.reader.releaseLock();
+        state.reader = null;
+      }
     }
   }
 
   function tapRemoteAudioTrack(track, sourceLabel) {
-    if (!track || track.kind !== "audio" || tappedTrackIds.has(track.id)) return;
+    if (!track || track.kind !== "audio" || track.readyState === "ended" || tappedTrackIds.has(track.id)) return;
     tappedTrackIds.add(track.id);
+    const state = {
+      track, route: "webaudio", processorActive: false, lastFrameAt: 0,
+      ended: false, nodes: [], reader: null, keepAlive: null,
+    };
     if (!trackSampleQueues.has(track.id)) {
       trackSampleQueues.set(track.id, []);
     }
@@ -669,6 +680,21 @@ export function buildBrowserAudioCaptureInitScript(): string {
       });
       track.addEventListener("ended", () => {
         logToNode("Track ended id=" + track.id);
+        state.ended = true;
+        if (state.reader) void state.reader.cancel().catch(() => {});
+        for (const node of state.nodes) {
+          node.disconnect();
+          if (node.port) node.port.close();
+          if ("onaudioprocess" in node) node.onaudioprocess = null;
+        }
+        if (state.keepAlive) {
+          state.keepAlive.pause();
+          state.keepAlive.srcObject = null;
+          state.keepAlive.remove();
+          createdMediaElements.delete(state.keepAlive);
+        }
+        trackSampleQueues.delete(track.id);
+        tappedTrackIds.delete(track.id);
       });
     } catch {
       // Ignore event listener attachment errors
@@ -681,14 +707,14 @@ export function buildBrowserAudioCaptureInitScript(): string {
         tappedElements.add(keepAliveAudio);
         keepAliveAudio.autoplay = true;
         keepAliveAudio.playsInline = true;
-        keepAliveAudio.volume = 0.01;
+        keepAliveAudio.volume = 0;
         keepAliveAudio.style.display = "none";
         keepAliveAudio.srcObject = new MediaStream([track]);
         if (document.body) {
           document.body.appendChild(keepAliveAudio);
         }
         keepAliveAudio.play().catch(() => {});
-        activeKeepAliveElements.push(keepAliveAudio);
+        state.keepAlive = keepAliveAudio;
       }
     } catch {
       // Ignore keep-alive audio element errors
@@ -696,10 +722,10 @@ export function buildBrowserAudioCaptureInitScript(): string {
 
     // Always connect the native-rate AudioContext graph so Chromium pulls the MediaStreamTrack
     // immediately and provides an automatic fallback if MediaStreamTrackProcessor is unavailable.
-    connectTrackToWebAudio(track);
+    void connectTrackToWebAudio(state);
 
     if (typeof window.MediaStreamTrackProcessor === "function") {
-      void startTrackProcessorCapture(track);
+      void startTrackProcessorCapture(state);
     }
   }
 
