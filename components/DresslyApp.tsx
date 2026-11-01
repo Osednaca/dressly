@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatPanel } from "@/components/ChatPanel";
 import { DecisionsPanel } from "@/components/DecisionsPanel";
 import { FinalLook } from "@/components/FinalLook";
@@ -15,6 +15,7 @@ import { DesignVersionStrip } from "@/components/consultation/DesignVersionStrip
 import { DresslyAmbient } from "@/components/shaders/DresslyAmbient";
 import { Sparkle } from "@/components/icons";
 import { api } from "@/lib/client/api";
+import { createConsultationJobPoller, handleConsultationJobEvent } from "@/lib/client/consultation-jobs";
 import type { LiveToolCall } from "@/lib/client/live";
 import { useConsultationEvents } from "@/lib/client/use-consultation-events";
 import { useLiveStylist } from "@/lib/client/use-live-stylist";
@@ -150,6 +151,8 @@ export function DresslyApp() {
     setJob(timedOut);
     return timedOut;
   }, []);
+
+  const consultationPoller = useMemo(() => createConsultationJobPoller(pollJob), [pollJob]);
 
   const sendMessage = useCallback(
     async (message: string, sessionId: string | undefined = session?.id) => {
@@ -319,6 +322,7 @@ export function DresslyApp() {
 
   const newLook = useCallback(() => {
     pollToken.current += 1;
+    consultationPoller.clear();
     setSession(null);
     setSuggestions([]);
     setJob(null);
@@ -333,7 +337,7 @@ export function DresslyApp() {
     setSelectedVersionId(null);
     setCompareWithV1(false);
     window.scrollTo({ top: 0 });
-  }, []);
+  }, [consultationPoller]);
 
   useConsultationEvents({
     sessionId: session?.id,
@@ -342,9 +346,11 @@ export function DresslyApp() {
       setSession(updatedSession);
     },
     onEvent: (event) => {
-      if (event.type === "design.generation.completed") {
-        setSelectedVersionId(event.version.id);
-      } else if (event.type === "vto.failed" && event.blocked) {
+      handleConsultationJobEvent(event, {
+        start: (startedJob) => { void consultationPoller.start(startedJob); },
+        selectVersion: setSelectedVersionId,
+      });
+      if (event.type === "vto.failed" && event.blocked) {
         setBlocked(event.blocked);
       }
     },
@@ -427,7 +433,7 @@ export function DresslyApp() {
         if (res.autoJob) {
           setJob(res.autoJob);
           if (res.autoJob.status === "pending") {
-            void pollJob(res.autoJob.id);
+            void consultationPoller.start(res.autoJob);
           }
         }
       } catch (transcriptErr) {
@@ -438,7 +444,7 @@ export function DresslyApp() {
         setSending(false);
       }
     },
-    [pollJob, session],
+    [consultationPoller, session],
   );
 
   const handleSuggestionAction = useCallback(
@@ -464,7 +470,7 @@ export function DresslyApp() {
         if (res.job) {
           setJob(res.job);
           if (res.job.status === "pending") {
-            void pollJob(res.job.id);
+            void consultationPoller.start(res.job);
           }
         }
       } catch (sugErr) {
@@ -475,7 +481,7 @@ export function DresslyApp() {
         setSending(false);
       }
     },
-    [pollJob, session],
+    [consultationPoller, session],
   );
 
   const handleRestoreVersion = useCallback(
@@ -512,7 +518,7 @@ export function DresslyApp() {
         if (res.job) {
           setJob(res.job);
           if (res.job.status === "pending") {
-            void pollJob(res.job.id);
+            void consultationPoller.start(res.job);
           }
         }
       } catch (tryOnErr) {
@@ -523,7 +529,7 @@ export function DresslyApp() {
         setSending(false);
       }
     },
-    [pollJob, session],
+    [consultationPoller, session],
   );
 
   const handleRunDiagnostic = useCallback(
@@ -544,7 +550,7 @@ export function DresslyApp() {
         if (res.job) {
           setJob(res.job);
           if (res.job.status === "pending") {
-            void pollJob(res.job.id);
+            void consultationPoller.start(res.job);
           }
         }
         return res;
@@ -557,7 +563,7 @@ export function DresslyApp() {
         setSending(false);
       }
     },
-    [pollJob, session],
+    [consultationPoller, session],
   );
 
   const working = sending || job?.status === "pending";

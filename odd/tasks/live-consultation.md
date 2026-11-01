@@ -27,6 +27,11 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 
 ## Tasks Checklist
 
+### Phase 6 — Photorealistic initial image and Runway completion
+
+- [ ] **C6.1** Restore polling for voice-started Runway generation, prevent duplicate polling, and select the completed image in the UI. Route: delegated (mapping and writer triggers: multiple client and test files). Acceptance: started events initiate exactly one poll per job, manual and voice paths both display the completed version, error handling remains intact. Checks: targeted behavior tests, `npm test`, `npm run typecheck`; production build if feasible. TDD off, inherited configuration above. RDD disabled/unmanaged. Forecast 150–300 authored lines; user previously selected `feature-branch-chain`; no push or PR authorized. Mirror pending: Engram unavailable. Baseline `63e0479`.
+- [ ] **C6.2** Replace the cartoon seed with the supplied photographic image and align default design and regeneration behavior with the actual image. Route: delegated (seed asset, generator, state and related tests). Acceptance: new consultations display the supplied realistic handbag, state matches its gold hardware and top handle, and regeneration cannot silently revert to cartoon. Checks: targeted tests, `npm test`, `npm run typecheck`. TDD off; RDD disabled/unmanaged. Forecast 100–250 authored lines, generated/binary asset excluded; same delivery strategy and baseline. Mirror pending: Engram unavailable.
+
 ### Phase 1 — Domain State, AI Decision Engine (Gemini + JEV) & Human-in-the-Loop UI
 - [x] **C1.1** Seed V1 canonical handbag asset (`scripts/gen-consultation-seed.ts` -> `public/catalog/consultation-bag-v1.png`), extend `lib/env.ts` & `.env.example`, and add domain/wire types (`lib/types.ts`, `lib/api-types.ts`) + pure session reducers (`lib/session/reducer.ts`) + unit tests (`tests/consultation-reducer.test.ts`).
   - Route: `delegated` (writer trigger: touches 6+ files). Commit: `ed1a17b` (`npm run typecheck` clean; `npm test` 41/41). RDD: `disabled/unmanaged`.
