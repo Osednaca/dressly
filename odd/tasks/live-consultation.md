@@ -59,7 +59,7 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
 
 ### C5.3 — Echo and intermittent listening regression (2026-11-01)
 
-- [ ] **C5.3** Silence the WebRTC bot's speaker output and recover audio capture independently for each remote track, with regression tests and isolated Chromium audio verification.
+- [x] **C5.3** Silence the WebRTC bot's speaker output and recover audio capture independently for each remote track, with regression tests and isolated Chromium audio verification.
   - Authorized scope: user's request to fix severe echo and intermittent listening in Live consultation; no remote execution, authenticated Meet access, deployment, push, or PR.
   - Route: `delegated`; mapping/preparation trigger (4+ relevant files) completed by `explore_audio`; writer trigger (capture, bot launcher, behavioral tests).
   - Evidence: global `trackProcessorFramesReceived` permanently suppresses every WebAudio fallback after any processor frame, including failed copies; Chromium output is unmuted and auxiliary audio players also render sound.
@@ -72,7 +72,9 @@ Implement **Dressly Live Consultation** across 4 structured phases (`docs/LIVE_C
   - Verification: full `npm test` with temporary `MEETING_BOT_PROFILE_DIR`: 77 tests, 74 pass, 0 fail, 3 opt-in skips. `npm run typecheck` and `git diff --check` passed. Focused `RUN_AUDIO_CHROMIUM_TEST=1 node --no-warnings --experimental-strip-types --import ./scripts/register.mjs --test tests/meeting-audio-capture.test.ts`: 13/13 passed, including local Chromium WebRTC loopback with muted output; browser logs confirmed non-silent MediaStreamTrackProcessor and forced WebAudio fallback separately. Chromium used disposable profiles, no STUN or external meeting.
   - Launch verification: production and Chromium tests share `chromiumAudioOptions`; `ignoreDefaultArgs` removes `--mute-audio` only for PulseAudio. Final Chromium 2/2 rerun also checked `chrome://version` for the effective mute flag. Final typecheck passed.
   - Historical checks: initial test harness parameter-property syntax and three test-only type errors failed, then were corrected and rerun successfully. One full-suite repetition reported 73 pass/1 fail with truncated diagnostics; the final repetition passed 74/74 executed tests. The older opt-in session/join Chromium E2E was skipped; new isolated audio tests were run explicitly. Real Meet/acoustic and remote Gemini checks remain pending; no live call access was authorized.
-  - Commit/build: first build deliberately cancelled after correcting launch options; final production build is in progress. Next: record build result and work-unit commit. Engram remains unavailable.
+  - Commit: `de8b6b68034cbac44c089e7e9e5eb470d22cfc55` (`fix(consultation): silence bot output and recover audio per track`); 439 authored additions + deletions including task documentation. One coherent capture/launch regression fix with its behavioral/runtime tests exceeds the advisory 400-line target; user-selected `feature-branch-chain` retained, no PR published. RDD: disabled/unmanaged.
+  - Build limitation: first `npm run build` cancelled after launch-option corrections; second run remained in Next/Turbopack `compile` for several minutes without completion or an error and was deliberately stopped. Build is **PENDING / NOT VERIFIED**, not a pass. Host had approximately 0.8–2 GiB free memory during checks; this may explain slowness but is not a confirmed root cause. No build/config changes were made.
+  - Next: restart `npm run bot:worker`, rejoin with a fresh bot instance, and verify speech/echo in the user's real Meet; rerun production build when feasible. Functional correction is complete; real-call validation, production build, and Engram mirror remain pending.
 
 ## Acceptance Criteria (Phase 1)
 
