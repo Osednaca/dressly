@@ -334,7 +334,7 @@ export async function POST(request: Request, context: Context) {
 
       case "simulate_transcript": {
         const text =
-          body.text?.trim() || "I like it, but can we make the hardware gold?";
+          body.text?.trim() || "I like it, but can we make the hardware silver?";
         const turn = await ingestConsultationTranscript(id, {
           text,
           isFinal: true,

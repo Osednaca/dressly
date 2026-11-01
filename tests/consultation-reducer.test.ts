@@ -51,6 +51,8 @@ test("initConsultation creates V1 Original, logs activity, and places bespoke ba
   assert.equal(con.originalVersionId, v1.id);
   assert.equal(con.currentDesignVersionId, v1.id);
   assert.deepEqual(con.designState, DEFAULT_BAG_DESIGN_STATE);
+  assert.equal(con.designState.hardwareColor, "gold");
+  assert.equal(con.designState.strapType, "top handle");
   assert.equal(con.activity[0]?.text, "Consultation started");
 
   const bagInLook = session.currentLook.accessories.find((a) => a.subcategory === "bag");
@@ -256,6 +258,7 @@ test("addProposedSuggestion deduplicates by fingerprint and actOnProposedSuggest
 test("recordDesignVersion, restoreDesignVersion, attachTryOnToVersion, and endConsultation manage version history", () => {
   let session = createSessionRecord("ses_ver", null);
   session = initConsultation(session, {
+    initialDesignState: { hardwareColor: "silver" },
     meetingUrl: "https://meet.google.com/abc-defg-hij",
     consentConfirmed: true,
   });

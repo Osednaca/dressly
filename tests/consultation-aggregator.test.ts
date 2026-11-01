@@ -19,7 +19,9 @@ import {
 } from "@/lib/agent/consultation-orchestrator";
 import { subscribeConsultationEvents } from "@/lib/server/consultation-events";
 import { createSession } from "@/lib/session/store";
-import { DEFAULT_BAG_DESIGN_STATE } from "@/lib/types";
+import { DEFAULT_BAG_DESIGN_STATE as LIVE_DEFAULT } from "@/lib/types";
+
+const DEFAULT_BAG_DESIGN_STATE = { ...LIVE_DEFAULT, hardwareColor: "silver" };
 import { extractConsultationCandidateDeterministic } from "@/services/gemini/consultation";
 import { buildConsultationJevSignals, evaluateConsultationDeterministic } from "@/services/jev";
 
@@ -114,6 +116,7 @@ test("enqueueConsultationUtterance merges split clauses within debounce window i
 test("irrelevant small talk, audio checks, and retractions resolve to IGNORE with zero suggestions", async () => {
   const session = await createSession(null);
   const started = await startSessionConsultation(session.id, {
+      initialDesignState: { hardwareColor: "silver" },
     meetingUrl: "https://meet.google.com/abc-defg-hij",
     consentConfirmed: true,
   });
@@ -215,6 +218,7 @@ test("full consultation orchestrator lifecycle: start -> ingest -> apply (V2) ->
 
   try {
     const started = await startSessionConsultation(session.id, {
+      initialDesignState: { hardwareColor: "silver" },
       meetingUrl: "https://meet.google.com/abc-defg-hij",
       consentConfirmed: true,
     });

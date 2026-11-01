@@ -16,7 +16,7 @@ import type {
 } from "@/lib/types";
 
 const FLAGSHIP_SCENARIO_CHIPS = [
-  "I like it, but can we make the hardware gold?",
+  "I like it, but can we make the hardware silver?",
   "That's better. Maybe make it a little smaller.",
   "Could we make the strap longer so I can wear it crossbody?",
   "Can I see how that looks on me?",
@@ -287,7 +287,7 @@ export function ConsultationPanel({
             value={utterance}
             disabled={busy || isEndedOrFailed}
             onChange={(e) => setUtterance(e.target.value)}
-            placeholder="Speak in Meet or type a client request (e.g. 'Make the hardware gold')..."
+            placeholder="Speak in Meet or type a client request (e.g. 'Make the hardware silver')..."
             className="w-full rounded-[3px] border border-chrome/15 bg-night/80 px-3 py-2 text-[13px] text-ink placeholder:text-muted/50 focus:border-accent focus:outline-none disabled:opacity-50"
           />
           <button

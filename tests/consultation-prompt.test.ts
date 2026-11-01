@@ -12,10 +12,12 @@ import {
 } from "@/lib/session/reducer";
 import { persist } from "@/lib/session/store";
 import {
-  DEFAULT_BAG_DESIGN_STATE,
+  DEFAULT_BAG_DESIGN_STATE as LIVE_DEFAULT,
   DESIGN_FIELD_KEYS,
   type DesignFieldDiff,
 } from "@/lib/types";
+
+const DEFAULT_BAG_DESIGN_STATE = { ...LIVE_DEFAULT, hardwareColor: "silver", strapType: "shoulder", strapLength: "standard shoulder drop" };
 
 function splitPromptSections(promptText: string): {
   currentProduct: string;

@@ -221,7 +221,7 @@ test("Failure isolation: when bot worker fails (botStatus = FAILED), manual tran
 
   // Manual transcript & suggestion approval still create V2 while botStatus is FAILED
   const turn = await ingestConsultationTranscript(created.id, {
-    text: "I like it, but can we make the hardware gold?",
+    text: "I like it, but can we make the hardware silver?",
     isFinal: true,
     immediate: true,
   });
@@ -232,7 +232,7 @@ test("Failure isolation: when bot worker fails (botStatus = FAILED), manual tran
   });
   assert.ok(applied);
   assert.equal(applied.session.consultation?.versions.length, 2);
-  assert.equal(applied.session.consultation?.versions[1]?.label, "V2 Gold hardware");
+  assert.equal(applied.session.consultation?.versions[1]?.label, "V2 Silver hardware");
 
   // VTO diagnostic still works on V2 while bot is failed
   const vtoDiag = await invokeDiagnostic(created.id, "test_youcam_vto");

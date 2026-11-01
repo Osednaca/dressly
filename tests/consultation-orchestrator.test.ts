@@ -25,6 +25,7 @@ test("Flagship 4-step handbag consultation scenario (V1 -> V2 -> V3 -> V4 -> You
   try {
     // 1. Start consultation: V1 Original (medium burgundy leather shoulder bag, silver hardware, shoulder strap)
     const started = await startSessionConsultation(created.id, {
+      initialDesignState: { hardwareColor: "silver", strapType: "shoulder", strapLength: "standard shoulder drop" },
       meetingUrl: "https://meet.google.com/abc-defg-hij",
       consentConfirmed: true,
     });

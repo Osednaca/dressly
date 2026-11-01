@@ -115,7 +115,7 @@ transition, and light the scene.
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm test` | Deterministic behaviour tests (`node --test`) |
 | `npm run gen:catalog` | Regenerate `public/catalog/` (35 flat-lay renders) |
-| `npm run gen:consultation-seed` | Regenerate V1 handbag (`public/catalog/consultation-bag-v1.png`) and demo portrait |
+| `npm run gen:consultation-seed` | Verify the checked-in photographic V1 handbag (`public/catalog/consultation-bag-v1.png`) and generate the demo portrait |
 | `npm run bot:worker` | Start isolated Playwright + Chromium Google Meet bot worker (`127.0.0.1:4100`) |
 | `npm run bot:login` | Launch headed Chromium against `data/bot-profile` for one-time Google account sign-in |
 | `npm run bot:join -- https://meet.google.com/xxx-xxxx-xxx` | Standalone live Google Meet join + 16 kHz audio/Gemini smoke test |
@@ -190,7 +190,7 @@ All meeting audio capture sits behind the `ConsultationAudioSource` interface (`
 | `RUNWAY_IMAGE_MODEL` | `nano_banana_2.1` | Runway `POST /v1/text_to_image` model for iterative product revisions |
 | `RUNWAY_IMAGE_RATIO` | `896:1200` | 3:4 studio portrait aspect ratio (`1792:2400` for high-res finalize) |
 | `YOUCAM_API_KEY` | — | YouCam S2S v2.0 Virtual Try-On API key |
-| `DRESSLY_CONSULTATION_DEMO_MODE` | `false` | Preloads V1 burgundy leather shoulder bag & demo customer portrait while keeping real AI providers active |
+| `DRESSLY_CONSULTATION_DEMO_MODE` | `false` | Preloads V1 burgundy leather top-handle bag & demo customer portrait while keeping real AI providers active |
 | `CONSULTATION_AUTO_APPLY_THRESHOLD` | `0.90` | Minimum confidence (`0.5..1.0`) required when `AUTO APPLY ●` is enabled |
 | `MEETING_BOT_PORT` | `4100` | Port for the standalone Playwright meeting-bot worker |
 | `MEETING_BOT_URL` | `http://127.0.0.1:4100` | Internal worker URL called by Next.js |
@@ -230,9 +230,9 @@ bottom of the consultation panel to test each subsystem independently:
 6. **`[ Test Runway Revision ]`** — Triggers Runway `nano_banana_2.1` with `@latest_design` and `@original_design` reference images.
 7. **`[ Test YouCam VTO ]`** — Triggers YouCam Virtual Try-On for the active handbag version (automatically seeding the demo customer portrait if no photo was uploaded).
 
-To run the **Flagship 4-Step Handbag Consultation Scenario** (`V1 Original` burgundy shoulder bag with silver hardware):
+To run the **Flagship 4-Step Handbag Consultation Scenario** (`V1 Original` burgundy top-handle bag with gold hardware):
 
-1. *"I like it, but can we make the hardware gold?"* → Approve suggestion → **`V2 Gold hardware`**
+1. *"I like it, but can we make the hardware silver?"* → Approve suggestion → **`V2 Silver hardware`**
 2. *"That's better. Maybe make it a little smaller."* → Approve suggestion → **`V3 Smaller silhouette`** (anchored to both `@latest_design` and `@original_design`)
 3. *"Could we make the strap longer so I can wear it crossbody?"* → Approve suggestion → **`V4 Crossbody strap`**
 4. *"Can I see how that looks on me?"* (or click **`Try this version`**) → **YouCam Virtual Try-On**
