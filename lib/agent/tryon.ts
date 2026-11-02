@@ -102,7 +102,7 @@ export async function startTryOn(
       garmentName: product.name,
     });
 
-    const job = createJob({
+    const job = await createJob({
       id: newId("job"),
       sessionId: session.id,
       kind: "tryon",
@@ -132,12 +132,13 @@ export interface PollTryOnResult {
 async function commitLook(job: AgentJob, state: TryOnState & { status: "success" }): Promise<PollTryOnResult> {
   const product = job.productId ? getProduct(job.productId) : undefined;
   const ext = extFromContentType(state.contentType, "png");
-  const lookId = newId("look");
+  const lookId = `look_${job.id}`;
   const fileName = `${lookId}.${ext}`;
   await writeDataFile(RESULT_DIR, fileName, state.image);
   const imagePath = mediaUrl("results", fileName);
 
   const next = await mutateSession(job.sessionId, (current) => {
+    if (current.looks.some((look) => look.id === lookId)) return current;
     let session = current;
     if (job.action === "CHANGE_FULL_OUTFIT") {
       session = clearSlot(session, "upper_body");
@@ -158,14 +159,14 @@ async function commitLook(job: AgentJob, state: TryOnState & { status: "success"
     return session;
   });
 
-  updateJob(job.id, { status: "success", lookId });
-  const updated = getJob(job.id) ?? job;
+  await updateJob(job.id, { status: "success", lookId });
+  const updated = await getJob(job.id) ?? job;
   const look = next?.looks.find((entry) => entry.id === lookId);
   return { job: jobView(updated, look?.index), session: next ?? undefined, look };
 }
 
 export async function pollTryOn(jobId: string): Promise<PollTryOnResult | null> {
-  const job = getJob(jobId);
+  const job = await getJob(jobId);
   if (!job) return null;
   if (job.status === "success") {
     const session = await getSession(job.sessionId);
@@ -174,31 +175,31 @@ export async function pollTryOn(jobId: string): Promise<PollTryOnResult | null> 
   }
   if (job.status === "failed") return { job: jobView(job) };
 
-  recordPoll(job.id);
+  await recordPoll(job.id);
   try {
     const state = await tryOnEngine().poll(job.handle as { id: string; provider: "youcam" | "mock" });
     if (state.status === "pending") {
-      const refreshed = getJob(job.id) ?? job;
+      const refreshed = await getJob(job.id) ?? job;
       return { job: jobView(refreshed) };
     }
     if (state.status === "failed") {
       console.error(`[dressly] try-on ${job.id} failed:`, state.message);
-      failJob(job.id, TRYON_FAILED_MESSAGE, state.retryable);
-      const refreshed = getJob(job.id) ?? job;
+      await failJob(job.id, TRYON_FAILED_MESSAGE, state.retryable);
+      const refreshed = await getJob(job.id) ?? job;
       return { job: jobView(refreshed) };
     }
     return await commitLook(job, state as TryOnState & { status: "success" });
   } catch (error) {
     console.error(`[dressly] try-on ${job.id} poll failed:`, error);
-    failJob(job.id, TRYON_FAILED_MESSAGE, true);
-    const refreshed = getJob(job.id) ?? job;
+    await failJob(job.id, TRYON_FAILED_MESSAGE, true);
+    const refreshed = await getJob(job.id) ?? job;
     return { job: jobView(refreshed) };
   }
 }
 
 /** Re-submit a failed try-on for the same garment, e.g. after a transient outage. */
 export async function retryTryOn(jobId: string): Promise<StartTryOnResult> {
-  const job = getJob(jobId);
+  const job = await getJob(jobId);
   if (!job) {
     return { job: null, blocked: { code: "NO_JOB", message: "That request has expired.", retryable: false } };
   }

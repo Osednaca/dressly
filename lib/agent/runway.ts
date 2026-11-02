@@ -70,7 +70,7 @@ export async function startRunway(
       imageContentType: media.contentType,
       promptText: PROMPT,
     });
-    const job = createJob({
+    const job = await createJob({
       id: newId("job"),
       sessionId: session.id,
       kind: "runway",
@@ -107,19 +107,19 @@ export interface PollRunwayResult {
 }
 
 export async function pollRunway(jobId: string): Promise<PollRunwayResult | null> {
-  const job = getJob(jobId);
+  const job = await getJob(jobId);
   if (!job || job.kind !== "runway") return null;
   if (job.status === "success") return { job: jobView(job) };
   if (job.status === "failed") return { job: jobView(job) };
 
-  recordPoll(job.id);
+  await recordPoll(job.id);
   try {
     const state = await runwayEngineOrThrow().poll(job.handle as { id: string; provider: "runway" });
-    if (state.status === "pending") return { job: jobView(getJob(job.id) ?? job) };
+    if (state.status === "pending") return { job: jobView(await getJob(job.id) ?? job) };
     if (state.status === "failed") {
       console.error(`[dressly] animation ${job.id} failed:`, state.message);
-      failJob(job.id, ANIMATION_FAILED_MESSAGE, state.retryable);
-      return { job: jobView(getJob(job.id) ?? job) };
+      await failJob(job.id, ANIMATION_FAILED_MESSAGE, state.retryable);
+      return { job: jobView(await getJob(job.id) ?? job) };
     }
 
     const fileName = `${job.lookId ?? job.id}.mp4`;
@@ -129,11 +129,11 @@ export async function pollRunway(jobId: string): Promise<PollRunwayResult | null
       const targetLookId = job.lookId ?? current.activeLookId ?? current.looks.at(-1)?.id;
       return targetLookId ? setLookVideo(current, targetLookId, mediaUrl("videos", fileName)) : current;
     });
-    updateJob(job.id, { status: "success" });
-    return { job: jobView(getJob(job.id) ?? job), session: session ?? undefined };
+    await updateJob(job.id, { status: "success" });
+    return { job: jobView(await getJob(job.id) ?? job), session: session ?? undefined };
   } catch (error) {
     console.error(`[dressly] animation ${job.id} poll failed:`, error);
-    failJob(job.id, ANIMATION_FAILED_MESSAGE, true);
-    return { job: jobView(getJob(job.id) ?? job) };
+    await failJob(job.id, ANIMATION_FAILED_MESSAGE, true);
+    return { job: jobView(await getJob(job.id) ?? job) };
   }
 }

@@ -156,7 +156,7 @@ export async function startConsultationTryOn(
     });
 
     const customBagProduct = buildCustomBagProduct(version);
-    const job = createJob({
+    const job = await createJob({
       id: newId("job"),
       sessionId: session.id,
       kind: "consultation_tryon",
@@ -200,7 +200,7 @@ export async function startConsultationTryOn(
       version: version.version,
       taskKind: handle.taskKind ?? "bag",
     });
-    publishConsultationEvent(session.id, {
+    await publishConsultationEvent(session.id, {
       type: "vto.started",
       job: view,
       versionId: version.id,
@@ -238,7 +238,7 @@ export async function startConsultationTryOn(
           activityText,
         );
 
-      publishConsultationEvent(session.id, {
+      await publishConsultationEvent(session.id, {
         type: "vto.failed",
         blocked,
         message: blocked.message,
@@ -273,7 +273,7 @@ export async function startConsultationTryOn(
         TRYON_FAILED_MESSAGE,
       );
 
-    publishConsultationEvent(session.id, {
+    await publishConsultationEvent(session.id, {
       type: "vto.failed",
       blocked,
       message: blocked.message,
@@ -296,7 +296,7 @@ function pendingTryOnStep(polls: number): string {
 export async function pollConsultationTryOn(
   jobId: string,
 ): Promise<JobPollResponse | null> {
-  const job = getJob(jobId);
+  const job = await getJob(jobId);
   if (!job || job.kind !== "consultation_tryon") return null;
 
   if (job.status === "success") {
@@ -318,7 +318,7 @@ export async function pollConsultationTryOn(
     };
   }
 
-  const polled = recordPoll(job.id) ?? job;
+  const polled = await recordPoll(job.id) ?? job;
   const externalId = polled.externalId ?? polled.handle.id;
 
   try {
@@ -331,14 +331,14 @@ export async function pollConsultationTryOn(
 
     if (state.status === "pending") {
       const step = pendingTryOnStep(polled.polls);
-      const updated = updateJob(job.id, { step }) ?? polled;
+      const updated = await updateJob(job.id, { step }) ?? polled;
       return { job: jobView(updated) };
     }
 
     if (state.status === "failed") {
       console.error(`[dressly] consultation try-on ${job.id} failed:`, state.message);
       const failedMessage = state.message || TRYON_FAILED_MESSAGE;
-      const failed = failJob(job.id, failedMessage, state.retryable) ?? polled;
+      const failed = await failJob(job.id, failedMessage, state.retryable) ?? polled;
       const view = jobView(failed);
 
       const updated = await mutateSession(job.sessionId, (current) =>
@@ -350,7 +350,7 @@ export async function pollConsultationTryOn(
       );
 
       if (updated) {
-        publishConsultationEvent(job.sessionId, {
+        await publishConsultationEvent(job.sessionId, {
           type: "vto.failed",
           job: view,
           message: failedMessage,
@@ -365,7 +365,7 @@ export async function pollConsultationTryOn(
     }
 
     const ext = extFromContentType(state.contentType, "jpg");
-    const lookId = newId("look");
+    const lookId = `look_${job.id}`;
     const fileName = `look_${lookId}.${ext}`;
     await writeDataFile(RESULT_DIR, fileName, state.image);
     const imagePath = mediaUrl("results", fileName);
@@ -374,6 +374,13 @@ export async function pollConsultationTryOn(
     let resolvedVersionId = polled.versionId ?? "";
 
     const updated = await mutateSession(job.sessionId, (current) => {
+      createdLook = undefined;
+      resolvedVersionId = polled.versionId ?? "";
+      const existing = current.looks.find((look) => look.id === lookId);
+      if (existing) {
+        createdLook = existing;
+        return current;
+      }
       const consultation = current.consultation;
       const version =
         consultation?.versions.find((v) => v.id === polled.versionId) ??
@@ -412,7 +419,7 @@ export async function pollConsultationTryOn(
     });
 
     const completedJob =
-      updateJob(job.id, {
+      await updateJob(job.id, {
         status: "success",
         lookId,
         step: "Virtual try-on ready",
@@ -427,7 +434,7 @@ export async function pollConsultationTryOn(
         versionId: resolvedVersionId,
         imagePath: createdLook.imagePath,
       });
-      publishConsultationEvent(job.sessionId, {
+      await publishConsultationEvent(job.sessionId, {
         type: "vto.completed",
         look: createdLook,
         versionId: resolvedVersionId,
@@ -444,7 +451,7 @@ export async function pollConsultationTryOn(
     };
   } catch (error) {
     console.error(`[dressly] consultation try-on ${job.id} poll failed:`, error);
-    const failed = failJob(job.id, TRYON_FAILED_MESSAGE, true) ?? polled;
+    const failed = await failJob(job.id, TRYON_FAILED_MESSAGE, true) ?? polled;
     const view = jobView(failed);
 
     const updated = await mutateSession(job.sessionId, (current) =>
@@ -456,7 +463,7 @@ export async function pollConsultationTryOn(
     );
 
     if (updated) {
-      publishConsultationEvent(job.sessionId, {
+      await publishConsultationEvent(job.sessionId, {
         type: "vto.failed",
         job: view,
         message: TRYON_FAILED_MESSAGE,

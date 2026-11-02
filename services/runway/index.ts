@@ -3,6 +3,7 @@ import { renderStudioBagSvg } from "@/lib/catalog/bag-svg";
 import { env } from "@/lib/env";
 import { DEFAULT_BAG_DESIGN_STATE, type BagDesignState } from "@/lib/types";
 import { ProviderError } from "@/lib/util/http";
+import { isSupabaseStorage } from "@/lib/storage/supabase";
 import { newId } from "@/lib/util/id";
 import { runwayEngine } from "@/services/runway/client";
 import type {
@@ -97,12 +98,15 @@ export function runwayImageEngine(options?: {
   allowFallbackWhenDisabled?: boolean;
 }): RunwayImageEngine {
   if (env.mockExternalApis) {
+    if (isSupabaseStorage()) {
+      throw new ProviderError("runway", 503, "Runway mock cannot run across serverless instances; configure the real Runway provider", { retryable: false });
+    }
     return mockRunwayImageEngine;
   }
   if (runwayAvailable()) {
     return runwayEngine;
   }
-  if (options?.allowFallbackWhenDisabled) {
+  if (options?.allowFallbackWhenDisabled && !isSupabaseStorage()) {
     return mockRunwayImageEngine;
   }
   return runwayEngineOrThrow();

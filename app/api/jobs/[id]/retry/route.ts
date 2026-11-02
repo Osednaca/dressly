@@ -13,7 +13,7 @@ type Context = { params: Promise<{ id: string }> };
 export async function POST(_request: Request, context: Context) {
   try {
     const { id } = await context.params;
-    const existing = getJob(id);
+    const existing = await getJob(id);
 
     if (existing?.kind === "consultation_design") {
       const session = await getSession(existing.sessionId);

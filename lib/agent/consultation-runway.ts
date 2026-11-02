@@ -20,6 +20,7 @@ import {
 } from "@/lib/session/reducer";
 import { getSession, mutateSession } from "@/lib/session/store";
 import { RESULT_DIR, extFromContentType, writeDataFile } from "@/lib/storage/files";
+import { isSupabaseStorage } from "@/lib/storage/supabase";
 import { contentTypeFor, mediaUrl, readMediaBytes } from "@/lib/storage/media";
 import type {
   BagDesignState,
@@ -43,6 +44,10 @@ const DESIGN_FAILED_MESSAGE =
 export async function readPublicAsset(
   imagePath: string,
 ): Promise<{ bytes: Buffer; contentType: string }> {
+  // User-provided consultation references must never escape the public catalog.
+  if (!/^\/catalog\/[a-zA-Z0-9][a-zA-Z0-9._-]*\.(?:png|jpe?g|webp)$/i.test(imagePath) || imagePath.includes("..")) {
+    throw new Error("Invalid catalog image path");
+  }
   const relative = imagePath.replace(/^\/+/, "");
   const disk = path.join(process.cwd(), "public", relative);
   const bytes = await readFile(/* turbopackIgnore: true */ disk);
@@ -163,7 +168,7 @@ export async function startConsultationDesign(
       versionLabel: fullVersionLabel,
     });
 
-    const job = createJob({
+    const job = await createJob({
       id: newId("job"),
       sessionId: session.id,
       kind: "consultation_design",
@@ -204,7 +209,7 @@ export async function startConsultationDesign(
       versionLabel: fullVersionLabel,
       suggestionId: params.suggestionId ?? null,
     });
-    publishConsultationEvent(session.id, {
+    await publishConsultationEvent(session.id, {
       type: "design.generation.started",
       job: view,
       suggestionId: params.suggestionId,
@@ -238,7 +243,9 @@ export async function startConsultationDesign(
       job: null,
       blocked: {
         code: "RUNWAY_DESIGN_FAILED",
-        message: DESIGN_FAILED_MESSAGE,
+        message: isSupabaseStorage() && (!env.runwayEnabled || !env.runwayApiKey || env.mockExternalApis)
+          ? "Runway is not configured for this deployment. Enable it and provide its API key; serverless mode cannot use the local mock."
+          : DESIGN_FAILED_MESSAGE,
         retryable,
       },
       session: fallbackSession,
@@ -262,7 +269,7 @@ export async function pollConsultationDesign(
   jobId: string,
   onAutoTryOn?: (session: StylingSession, version: DesignVersion) => Promise<JobView | null>,
 ): Promise<PollConsultationDesignResult | null> {
-  const job = getJob(jobId);
+  const job = await getJob(jobId);
   if (!job || job.kind !== "consultation_design") return null;
 
   if (job.status === "success") {
@@ -283,7 +290,7 @@ export async function pollConsultationDesign(
     };
   }
 
-  const polled = recordPoll(job.id) ?? job;
+  const polled = await recordPoll(job.id) ?? job;
   const externalId = polled.externalId ?? polled.handle.id;
 
   try {
@@ -295,14 +302,14 @@ export async function pollConsultationDesign(
 
     if (state.status === "pending") {
       const step = pendingDesignStep(polled.polls);
-      const updated = updateJob(job.id, { step }) ?? polled;
+      const updated = await updateJob(job.id, { step }) ?? polled;
       return { job: jobView(updated) };
     }
 
     if (state.status === "failed") {
       console.error(`[dressly] consultation design ${job.id} failed:`, state.message);
       const failedMessage = state.message || DESIGN_FAILED_MESSAGE;
-      const failed = failJob(job.id, failedMessage, state.retryable) ?? polled;
+      const failed = await failJob(job.id, failedMessage, state.retryable) ?? polled;
       const view = jobView(failed);
 
       const updatedSession = await mutateSession(job.sessionId, (current) =>
@@ -314,7 +321,7 @@ export async function pollConsultationDesign(
       );
 
       if (updatedSession) {
-        publishConsultationEvent(job.sessionId, {
+        await publishConsultationEvent(job.sessionId, {
           type: "design.generation.failed",
           job: view,
           message: failedMessage,
@@ -329,12 +336,19 @@ export async function pollConsultationDesign(
     }
 
     const ext = extFromContentType(state.contentType, "png");
-    const versionId = newId("ver");
+    // Stable across retries if an instance dies after persisting the result.
+    const versionId = `ver_${job.id}`;
     const fileName = `design_${versionId}.${ext}`;
     await writeDataFile(RESULT_DIR, fileName, state.image);
 
     let createdVersion: DesignVersion | undefined;
     const updatedSession = await mutateSession(job.sessionId, (current) => {
+      createdVersion = undefined;
+      const existing = current.consultation?.versions.find((version) => version.id === versionId);
+      if (existing) {
+        createdVersion = existing;
+        return current;
+      }
       const recorded = recordDesignVersion(current, {
         id: versionId,
         imageUrl: mediaUrl("results", fileName),
@@ -349,7 +363,7 @@ export async function pollConsultationDesign(
     });
 
     const completedJob =
-      updateJob(job.id, {
+      await updateJob(job.id, {
         status: "success",
         versionId,
         step: createdVersion ? `${createdVersion.label} ready` : "Design revision ready",
@@ -365,7 +379,7 @@ export async function pollConsultationDesign(
         label: createdVersion.label,
         imageUrl: createdVersion.imageUrl,
       });
-      publishConsultationEvent(job.sessionId, {
+      await publishConsultationEvent(job.sessionId, {
         type: "design.generation.completed",
         version: createdVersion,
         job: view,
@@ -392,7 +406,7 @@ export async function pollConsultationDesign(
     };
   } catch (error) {
     console.error(`[dressly] consultation design ${job.id} poll failed:`, error);
-    const failed = failJob(job.id, DESIGN_FAILED_MESSAGE, true) ?? polled;
+    const failed = await failJob(job.id, DESIGN_FAILED_MESSAGE, true) ?? polled;
     const view = jobView(failed);
 
     const updatedSession = await mutateSession(job.sessionId, (current) =>
@@ -404,7 +418,7 @@ export async function pollConsultationDesign(
     );
 
     if (updatedSession) {
-      publishConsultationEvent(job.sessionId, {
+      await publishConsultationEvent(job.sessionId, {
         type: "design.generation.failed",
         job: view,
         message: DESIGN_FAILED_MESSAGE,

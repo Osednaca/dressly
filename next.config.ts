@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   serverExternalPackages: ["playwright-core", "sharp"],
+  // API handlers read catalog references dynamically before sending images to providers.
+  // Include these files in each serverless trace, including the consultation seed photo.
+  outputFileTracingIncludes: { "/api/**/*": ["./public/catalog/**/*"] },
   // Origins allowed to reach the dev server through a proxy/tunnel. Needed when the
   // app is exposed on a public HTTPS host (e.g. a Cloudflare quick tunnel) so Next's
   // dev-time cross-origin protection does not block requests. Also gives the browser a

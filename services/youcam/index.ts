@@ -1,5 +1,6 @@
 import { env } from "@/lib/env";
 import { ProviderError } from "@/lib/util/http";
+import { isSupabaseStorage } from "@/lib/storage/supabase";
 import type { TryOnEngine } from "@/services/contracts";
 import { youcamEngine } from "@/services/youcam/client";
 import { mockYoucamEngine } from "@/services/youcam/mock";
@@ -14,9 +15,14 @@ import { mockYoucamEngine } from "@/services/youcam/mock";
 export function tryOnEngine(options?: {
   allowFallbackWhenDisabled?: boolean;
 }): TryOnEngine {
-  if (env.mockExternalApis) return mockYoucamEngine;
+  if (env.mockExternalApis) {
+    if (isSupabaseStorage()) {
+      throw new ProviderError("youcam", 503, "YouCam mock cannot run across serverless instances; configure the real YouCam provider", { retryable: false });
+    }
+    return mockYoucamEngine;
+  }
   if (!env.youcamApiKey) {
-    if (options?.allowFallbackWhenDisabled) return mockYoucamEngine;
+    if (options?.allowFallbackWhenDisabled && !isSupabaseStorage()) return mockYoucamEngine;
     throw new ProviderError("youcam", 401, "YOUCAM_API_KEY is not configured", {
       retryable: false,
     });

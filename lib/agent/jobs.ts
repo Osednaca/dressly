@@ -7,14 +7,12 @@ import type {
 } from "@/lib/types";
 import type { TryOnHandle } from "@/services/contracts";
 import type { RunwayHandle } from "@/services/runway/contract";
+import { randomUUID } from "node:crypto";
+import { isSupabaseStorage, supabaseRequest } from "@/lib/storage/supabase";
 
 /**
- * In-process job tracking for the asynchronous providers.
- *
- * YouCam generation and Runway image/video jobs are genuinely long-running, so a turn
- * submits and returns immediately; the browser polls here. Jobs are intentionally
- * memory-only: they are short-lived, tied to one process, and a lost job simply means
- * "try again", which is the honest behaviour after a restart.
+ * Provider jobs are shared between serverless instances in Supabase mode.
+ * Local development continues to use an in-process map.
  */
 export type JobHandle = TryOnHandle | RunwayHandle;
 
@@ -55,36 +53,104 @@ export interface AgentJob {
 }
 
 const jobs = new Map<string, AgentJob>();
+const localLeases = new Map<string, string>();
 
-export function createJob(job: AgentJob): AgentJob {
+interface JobRow { id: string; session_id: string; payload: AgentJob; revision: number }
+const endpoint = "/rest/v1/dressly_jobs";
+const idFilter = (id: string) => `id=eq.${encodeURIComponent(id)}`;
+
+async function readRow(id: string): Promise<JobRow | undefined> {
+  const response = await supabaseRequest(`${endpoint}?${idFilter(id)}&select=id,session_id,payload,revision`);
+  const rows = await response.json() as JobRow[];
+  return rows[0];
+}
+
+export async function createJob(job: AgentJob): Promise<AgentJob> {
   const normalized: AgentJob = {
     ...job,
     externalId: job.externalId ?? job.handle.id,
   };
-  jobs.set(normalized.id, normalized);
+  if (isSupabaseStorage()) {
+    await supabaseRequest(endpoint, {
+      method: "POST", headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+      body: JSON.stringify({ id: normalized.id, session_id: normalized.sessionId, payload: normalized }),
+    });
+  } else jobs.set(normalized.id, normalized);
   return normalized;
 }
 
-export function getJob(id: string): AgentJob | undefined {
-  return jobs.get(id);
+export async function getJob(id: string): Promise<AgentJob | undefined> {
+  return isSupabaseStorage() ? (await readRow(id))?.payload : jobs.get(id);
 }
 
-export function updateJob(id: string, patch: Partial<AgentJob>): AgentJob | undefined {
-  const existing = jobs.get(id);
-  if (!existing) return undefined;
-  const next = { ...existing, ...patch };
-  jobs.set(id, next);
-  return next;
+async function mutateJob(id: string, apply: (existing: AgentJob) => AgentJob): Promise<AgentJob | undefined> {
+  if (!isSupabaseStorage()) {
+    const existing = jobs.get(id);
+    if (!existing) return undefined;
+    const next = apply(existing);
+    jobs.set(id, next);
+    return next;
+  }
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const row = await readRow(id);
+    if (!row) return undefined;
+    const next = apply(row.payload);
+    const response = await supabaseRequest(`${endpoint}?${idFilter(id)}&revision=eq.${row.revision}&select=payload`, {
+      method: "PATCH", headers: { "Content-Type": "application/json", Prefer: "return=representation" },
+      body: JSON.stringify({ payload: next, revision: row.revision + 1 }),
+    });
+    const updated = await response.json() as Array<{ payload: AgentJob }>;
+    if (updated.length) return updated[0]!.payload;
+  }
+  throw new Error("Concurrent job updates could not be reconciled");
 }
 
-export function recordPoll(id: string): AgentJob | undefined {
-  const existing = jobs.get(id);
-  if (!existing) return undefined;
-  return updateJob(id, { polls: existing.polls + 1 });
+export async function updateJob(id: string, patch: Partial<AgentJob>): Promise<AgentJob | undefined> {
+  return mutateJob(id, (existing) => ({ ...existing, ...patch }));
 }
 
-export function failJob(id: string, message: string, retryable: boolean): AgentJob | undefined {
+export async function recordPoll(id: string): Promise<AgentJob | undefined> {
+  return mutateJob(id, (existing) => ({ ...existing, polls: existing.polls + 1 }));
+}
+
+export async function failJob(id: string, message: string, retryable: boolean): Promise<AgentJob | undefined> {
   return updateJob(id, { status: "failed", message, retryable });
+}
+
+/** Recover pending jobs after reconnecting without exposing provider handles. */
+export async function listPendingJobsForSession(sessionId: string): Promise<JobView[]> {
+  let found: AgentJob[];
+  if (isSupabaseStorage()) {
+    const response = await supabaseRequest(`${endpoint}?session_id=eq.${encodeURIComponent(sessionId)}&payload->>status=eq.pending&select=payload`);
+    found = (await response.json() as Array<{ payload: AgentJob }>).map((row) => row.payload);
+  } else found = [...jobs.values()].filter((job) => job.sessionId === sessionId && job.status === "pending");
+  return found.map((job) => jobView(job));
+}
+
+/** One live poll may commit provider completion per job. Owner tokens prevent stale releases. */
+export async function acquireJobLease(id: string): Promise<string | null> {
+  const owner = randomUUID();
+  if (!isSupabaseStorage()) {
+    if (localLeases.has(id)) return null;
+    localLeases.set(id, owner);
+    return owner;
+  }
+  const response = await supabaseRequest("/rest/v1/rpc/dressly_claim_job", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: id, owner_id: owner }),
+  });
+  return await response.json() === true ? owner : null;
+}
+
+export async function releaseJobLease(id: string, owner: string): Promise<void> {
+  if (!isSupabaseStorage()) {
+    if (localLeases.get(id) === owner) localLeases.delete(id);
+    return;
+  }
+  await supabaseRequest("/rest/v1/rpc/dressly_release_job", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job_id: id, owner_id: owner }),
+  });
 }
 
 function tryOnStep(elapsedMs: number): string {

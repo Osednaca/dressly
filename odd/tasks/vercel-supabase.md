@@ -23,4 +23,5 @@ Vercel's application filesystem is read-only; current storage writes to `data/`,
 
 ## Progress
 
-- Read-only mapping identified local filesystem writes and process-local session/job/event state. User chose Supabase Free. Full mirror unavailable. Next: implement V1 and V2, then cross-instance events and integration.
+- V1 implementation commit `54164f7acfd1a7588b8c6a2d60e42af33ac1407a`; focused storage tests 3/3, including two independent processes with CAS conflicts. Shared orchestrator callback retry fixes are pending in V3. Full typecheck and integration still pending. RDD disabled/unmanaged. Engram unavailable.
+- V2 focused tests 4/4 across job storage, asset paths and serverless providers; integration and commit pending. Jobs use leases and stable result IDs; expiry and crash windows cannot guarantee exact-once auto-tryon. Supabase/Vercel live integration not exercised.
