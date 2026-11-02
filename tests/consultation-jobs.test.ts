@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createConsultationJobPoller, handleConsultationJobEvent } from "@/lib/client/consultation-jobs";
+import { createConsultationJobPoller, handleConsultationJobEvent, selectionAfterConsultationSnapshot } from "@/lib/client/consultation-jobs";
 import type { ConsultationSseEvent, JobView } from "@/lib/api-types";
 
 const pending: JobView = {
@@ -37,7 +37,7 @@ test("voice-started job is polled and its completed design becomes selected", as
   assert.equal(selected, "version-2");
 });
 
-test("duplicate events share an in-flight poll, but different or retried jobs can start", async () => {
+test("distinct jobs are polled serially, while duplicate events share the same poll", async () => {
   const calls: string[] = [];
   const resolvers: Array<(result: JobView | null) => void> = [];
   const poller = createConsultationJobPoller((job) => {
@@ -48,16 +48,42 @@ test("duplicate events share an in-flight poll, but different or retried jobs ca
   assert.equal(poller.start(pending), first);
   const other = { ...pending, id: "other" };
   const second = poller.start(other);
-  assert.deepEqual(calls, [pending.id, other.id]);
+  assert.deepEqual(calls, [pending.id]);
   resolvers[0]!(null);
   await first;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, [pending.id, other.id]);
   assert.equal(poller.start(other), second, "an older completion must not clear the active job");
   resolvers[1]!({ ...other, status: "failed" });
   await second;
   const retry = poller.start(other);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(calls.length, 3);
   resolvers[2]!({ ...other, status: "success" });
   await retry;
+});
+
+test("snapshot follows a changed current design without overriding a manual selection on reconnect", () => {
+  assert.equal(selectionAfterConsultationSnapshot("v2", "v2", "v1"), "v1");
+  assert.equal(selectionAfterConsultationSnapshot("v2", "v3", "v1"), "v3");
+  assert.equal(selectionAfterConsultationSnapshot(null, "v3", "v1"), "v1");
+  assert.equal(selectionAfterConsultationSnapshot("v2", null, "v1"), "v1");
+});
+
+test("clearing a session skips jobs queued for the old session", async () => {
+  let complete!: (value: JobView | null) => void;
+  const seen: string[] = [];
+  const poller = createConsultationJobPoller((job) => {
+    seen.push(job.id);
+    return new Promise((resolve) => { complete = resolve; });
+  });
+  const first = poller.start(pending);
+  const queued = poller.start({ ...pending, id: "queued" });
+  poller.clear();
+  complete(null);
+  await first;
+  assert.equal(await queued, null);
+  assert.deepEqual(seen, [pending.id]);
 });
 
 test("ending a session clears deduplication and terminal start events do not start polling", async () => {

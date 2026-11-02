@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { env } from "@/lib/env";
+import { meetingBotSecretIsSafe } from "@/services/meeting-bot/security";
 import { resolveFfmpegExecutable } from "@/services/meeting-bot/audio-capture";
 import {
   PCM_CHANNELS,
@@ -74,7 +75,7 @@ export function createBotWorkerServer(): BotWorkerServerHandle {
 
     const secretHeader = req.headers[MEETING_BOT_SECRET_HEADER];
     const providedSecret = Array.isArray(secretHeader) ? secretHeader[0] : secretHeader;
-    if (!providedSecret || providedSecret !== env.meetingBotSecret) {
+    if (!meetingBotSecretIsSafe(env.meetingBotSecret) || !providedSecret || providedSecret !== env.meetingBotSecret) {
       sendJson(res, 401, { error: "Unauthorized meeting bot request" });
       return;
     }

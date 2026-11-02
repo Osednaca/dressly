@@ -2,20 +2,46 @@ import type { ConsultationSseEvent, JobView } from "@/lib/api-types";
 
 /** Share one polling run when SSE and the initiating HTTP response report the same job. */
 export function createConsultationJobPoller(poll: (job: JobView) => Promise<JobView | null>) {
-  let active: { id: string; promise: Promise<JobView | null> } | null = null;
+  const pending = new Map<string, Promise<JobView | null>>();
+  let tail: Promise<unknown> | null = null;
+  let generation = 0;
   return {
     start(job: JobView): Promise<JobView | null> {
-      if (active?.id === job.id) return active.promise;
-      const entry = { id: job.id, promise: poll(job) };
-      active = entry;
-      void entry.promise.then(
-        () => { if (active === entry) active = null; },
-        () => { if (active === entry) active = null; },
+      const existing = pending.get(job.id);
+      if (existing) return existing;
+      const currentGeneration = generation;
+      // pollJob owns a single cancellation token; run distinct jobs serially so
+      // recovering one pending job does not cancel another one.
+      const run = tail
+        ? tail.then(() => currentGeneration === generation ? poll(job) : null)
+        : poll(job);
+      const result = run.then(
+        (value) => { if (pending.get(job.id) === result) pending.delete(job.id); return value; },
+        (error: unknown) => { if (pending.get(job.id) === result) pending.delete(job.id); throw error; },
       );
-      return entry.promise;
+      pending.set(job.id, result);
+      const settled = result.then(() => undefined, () => undefined);
+      tail = settled;
+      void settled.then(() => {
+        if (tail === settled) tail = null;
+      });
+      return result;
     },
-    clear() { active = null; },
+    clear() {
+      generation += 1;
+      pending.clear();
+      tail = null;
+    },
   };
+}
+
+/** Follow a newly current version without undoing a manual historical selection on reconnect. */
+export function selectionAfterConsultationSnapshot(
+  previousCurrent: string | null,
+  nextCurrent: string | null,
+  selected: string | null,
+): string | null {
+  return previousCurrent && nextCurrent && previousCurrent !== nextCurrent ? nextCurrent : selected;
 }
 
 /** Handle the job lifecycle regardless of whether speech or a button started it. */

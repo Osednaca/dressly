@@ -143,59 +143,33 @@ export async function POST(request: Request, context: Context) {
         const chromiumFound = health?.chromiumFound ?? false;
         const ffmpegFound = health?.ffmpegFound ?? false;
 
-        const updated = await mutateSession(id, (session) => {
-          let next = setConsultationBotStatus(session, "OPENING_MEET");
-          next = setConsultationBotStatus(next, "WAITING_FOR_ADMISSION");
-          next = setConsultationBotStatus(next, "JOINED");
-          next = setConsultationBotStatus(next, "LISTENING", {
-            error: null,
-            activityText: `Diagnostic bot join verified (worker: ${workerConnected ? "connected" : "simulated"})`,
-          });
-          return next;
-        });
+        const updated = workerConnected ? initialSession : await mutateSession(id, (session) =>
+          setConsultationBotStatus(session, "FAILED", {
+            error: "Bot worker unavailable; no meeting audio is being captured.",
+            activityText: "Bot worker unavailable; no meeting audio is being captured.",
+          }),
+        );
 
         const finalSession = updated ?? initialSession;
-        logConsultationMilestone("meet loaded", {
-          sessionId: id,
-          diagnostic: true,
-          botStatus: "WAITING_FOR_ADMISSION",
-        });
-        logConsultationMilestone("bot admitted", {
-          sessionId: id,
-          diagnostic: true,
-          botStatus: "JOINED",
-        });
-        logConsultationMilestone("audio capture started", {
-          sessionId: id,
-          diagnostic: true,
-          sampleRate: PCM_SAMPLE_RATE,
-          channels: PCM_CHANNELS,
-        });
-        logConsultationMilestone("Gemini connected", {
-          sessionId: id,
-          diagnostic: true,
-          model: env.geminiLiveModel,
-        });
-
-        publishConsultationEvent(id, {
+        await publishConsultationEvent(id, {
           type: "bot.status",
-          status: "LISTENING",
+          status: finalSession.consultation?.botStatus ?? "FAILED",
           consultationStatus: finalSession.consultation?.status ?? "LIVE",
-          message: "Dressly AI Assistant joined and listening (diagnostic)",
+          message: workerConnected ? "Bot worker reachable; meeting join was not verified." : "Bot worker unavailable; no meeting audio is being captured.",
           timestamp: nowIso(),
           session: finalSession,
         });
 
         const response: ConsultationDiagnosticResponse = {
-          ok: true,
+          ok: workerConnected,
           action: "test_bot_join",
-          summary: `Bot lifecycle verified (OPENING_MEET → WAITING_FOR_ADMISSION → JOINED → LISTENING). Worker: ${workerConnected ? "connected" : "simulated fallback"}.`,
+          summary: workerConnected ? "Bot worker reachable; this check does not join a meeting." : "Bot worker unavailable; no meeting audio is being captured.",
           details: {
             workerConnected,
             chromiumFound,
             ffmpegFound,
             audioBackend: health?.audioBackend ?? env.meetingAudioBackend,
-            botStatus: finalSession.consultation?.botStatus ?? "LISTENING",
+            botStatus: finalSession.consultation?.botStatus ?? "FAILED",
           },
           session: finalSession,
         };
@@ -206,11 +180,11 @@ export async function POST(request: Request, context: Context) {
         const reconnected = await reconnectSessionConsultation(id);
         const finalSession = reconnected ?? initialSession;
         const response: ConsultationDiagnosticResponse = {
-          ok: Boolean(reconnected),
+          ok: Boolean(reconnected) && finalSession.consultation?.botStatus !== "FAILED",
           action: "reconnect_bot",
-          summary: `Dressly AI Assistant reconnected (${finalSession.consultation?.botStatus ?? "LISTENING"}).`,
+          summary: `Bot status: ${finalSession.consultation?.botStatus ?? "FAILED"}.`,
           details: {
-            botStatus: finalSession.consultation?.botStatus ?? "LISTENING",
+            botStatus: finalSession.consultation?.botStatus ?? "FAILED",
             consultationStatus: finalSession.consultation?.status ?? "LIVE",
           },
           session: finalSession,
@@ -262,7 +236,7 @@ export async function POST(request: Request, context: Context) {
           ),
         );
         const finalSession = updated ?? initialSession;
-        publishConsultationEvent(id, {
+        await publishConsultationEvent(id, {
           type: "consultation.updated",
           session: finalSession,
         });
@@ -309,7 +283,7 @@ export async function POST(request: Request, context: Context) {
           ),
         );
         const finalSession = updated ?? initialSession;
-        publishConsultationEvent(id, {
+        await publishConsultationEvent(id, {
           type: "consultation.updated",
           session: finalSession,
         });
@@ -434,7 +408,7 @@ export async function POST(request: Request, context: Context) {
             confidence: sug.confidence,
             fields: sug.changes.map((c) => c.field),
           });
-          publishConsultationEvent(id, {
+          await publishConsultationEvent(id, {
             type: "suggestion.created",
             suggestion: sug,
             decision: createdDecision,

@@ -22,6 +22,7 @@ import {
 } from "@/lib/server/consultation-logger";
 import { createSession, getSession } from "@/lib/session/store";
 import { MEETING_BOT_SECRET_HEADER } from "@/services/meeting-bot/contract";
+import { meetingBotClient } from "@/services/meeting-bot/client";
 
 async function invokeDiagnostic(
   sessionId: string,
@@ -90,7 +91,10 @@ test("logConsultationMilestone records all 13 milestones and redacts secret keys
   }
 });
 
-test("Diagnostics endpoint supports all 8 layer-by-layer actions and seeds demo photo for VTO", async () => {
+test("Diagnostics endpoint supports all 8 layer-by-layer actions and seeds demo photo for VTO", async (t) => {
+  t.mock.method(meetingBotClient, "getHealth", async () => null);
+  t.mock.method(meetingBotClient, "startSession", async () => ({ workerConnected: false, status: "FAILED", message: "Worker unavailable" }));
+  t.mock.method(meetingBotClient, "reconnectSession", async () => ({ workerConnected: false, status: "FAILED", message: "Worker unavailable" }));
   clearConsultationLogs();
   const created = await createSession(null);
   assert.equal(created.userPhotoPath, null);
@@ -102,9 +106,9 @@ test("Diagnostics endpoint supports all 8 layer-by-layer actions and seeds demo 
 
   // 1. test_bot_join
   const joinRes = await invokeDiagnostic(created.id, "test_bot_join");
-  assert.equal(joinRes.ok, true);
+  assert.equal(joinRes.ok, false);
   assert.equal(joinRes.action, "test_bot_join");
-  assert.equal(joinRes.session.consultation?.botStatus, "LISTENING");
+  assert.equal(joinRes.session.consultation?.botStatus, "FAILED");
   assert.equal(joinRes.session.consultation?.status, "LIVE");
   assert.equal(typeof joinRes.details?.workerConnected, "boolean");
   assert.equal(typeof joinRes.details?.chromiumFound, "boolean");
@@ -112,9 +116,9 @@ test("Diagnostics endpoint supports all 8 layer-by-layer actions and seeds demo 
 
   // 2. reconnect_bot
   const reconnectRes = await invokeDiagnostic(created.id, "reconnect_bot");
-  assert.equal(reconnectRes.ok, true);
+  assert.equal(reconnectRes.ok, false);
   assert.equal(reconnectRes.action, "reconnect_bot");
-  assert.equal(reconnectRes.session.consultation?.botStatus, "LISTENING");
+  assert.equal(reconnectRes.session.consultation?.botStatus, "FAILED");
 
   // 3. test_audio_capture
   const audioRes = await invokeDiagnostic(created.id, "test_audio_capture");
@@ -176,7 +180,7 @@ test("Diagnostics endpoint supports all 8 layer-by-layer actions and seeds demo 
     getRecentConsultationLogs(created.id).map((l) => l.milestone),
   );
   for (const expected of CONSULTATION_MILESTONES) {
-    if (expected === "suggestion approved") continue;
+    if (["suggestion approved", "meet loaded", "bot admitted", "audio capture started", "Gemini connected"].includes(expected)) continue;
     assert.ok(
       recordedMilestones.has(expected),
       `Expected milestone "${expected}" to be logged`,
@@ -184,7 +188,9 @@ test("Diagnostics endpoint supports all 8 layer-by-layer actions and seeds demo 
   }
 });
 
-test("Failure isolation: when bot worker fails (botStatus = FAILED), manual transcript, suggestion approval, V2 generation, VTO, and Rejoin continue working", async () => {
+test("Failure isolation: when bot worker fails (botStatus = FAILED), manual transcript, suggestion approval, V2 generation, VTO, and Rejoin continue working", async (t) => {
+  t.mock.method(meetingBotClient, "startSession", async () => ({ workerConnected: false, status: "FAILED", message: "Worker unavailable" }));
+  t.mock.method(meetingBotClient, "reconnectSession", async () => ({ workerConnected: false, status: "FAILED", message: "Worker unavailable" }));
   const created = await createSession(null);
   await startSessionConsultation(created.id, {
     meetingUrl: "https://meet.google.com/abc-defg-hij",
@@ -241,9 +247,9 @@ test("Failure isolation: when bot worker fails (botStatus = FAILED), manual tran
   const polledVto = await pollConsultationTryOn(vtoDiag.job.id);
   assert.equal(polledVto?.job.status, "success");
 
-  // Clicking [ Rejoin ] (reconnect_bot) restores botStatus to LISTENING
+  // Rejoin reports failure honestly while the worker remains unreachable.
   const rejoined = await invokeDiagnostic(created.id, "reconnect_bot");
-  assert.equal(rejoined.ok, true);
-  assert.equal(rejoined.session.consultation?.botStatus, "LISTENING");
+  assert.equal(rejoined.ok, false);
+  assert.equal(rejoined.session.consultation?.botStatus, "FAILED");
   assert.equal(rejoined.session.consultation?.status, "LIVE");
 });

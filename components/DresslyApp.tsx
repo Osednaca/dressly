@@ -15,7 +15,7 @@ import { DesignVersionStrip } from "@/components/consultation/DesignVersionStrip
 import { DresslyAmbient } from "@/components/shaders/DresslyAmbient";
 import { Sparkle } from "@/components/icons";
 import { api } from "@/lib/client/api";
-import { createConsultationJobPoller, handleConsultationJobEvent } from "@/lib/client/consultation-jobs";
+import { createConsultationJobPoller, handleConsultationJobEvent, selectionAfterConsultationSnapshot } from "@/lib/client/consultation-jobs";
 import type { LiveToolCall } from "@/lib/client/live";
 import { useConsultationEvents } from "@/lib/client/use-consultation-events";
 import { useLiveStylist } from "@/lib/client/use-live-stylist";
@@ -72,6 +72,12 @@ export function DresslyApp() {
   const [compareWithV1, setCompareWithV1] = useState(false);
 
   const pollToken = useRef(0);
+  const animationPollToken = useRef(0);
+  const currentVersionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    currentVersionRef.current = session?.consultation?.currentDesignVersionId ?? null;
+  }, [session?.id, session?.consultation?.currentDesignVersionId]);
 
   useEffect(() => {
     api
@@ -164,14 +170,14 @@ export function DresslyApp() {
         const response: ChatResponse = await api.chat(sessionId, message);
         applyPayload(response);
         setBlocked(response.blocked);
-        if (response.job) await pollJob(response.job);
+        if (response.job) await consultationPoller.start(response.job);
       } catch (sendError) {
         setError(sendError instanceof Error ? sendError.message : "Something went wrong.");
       } finally {
         setSending(false);
       }
     },
-    [applyPayload, pollJob, session],
+    [applyPayload, consultationPoller, session],
   );
 
   const begin = useCallback(
@@ -226,7 +232,7 @@ export function DresslyApp() {
         applyPayload(response);
         setBlocked(response.blocked);
         if (response.job) {
-          void pollJob(response.job).then((final) => {
+          void consultationPoller.start(response.job).then((final) => {
             if (!final) return;
             liveNotify.current?.(
               final.status === "success"
@@ -250,7 +256,7 @@ export function DresslyApp() {
         setSending(false);
       }
     },
-    [applyPayload, pollJob, sessionId],
+    [applyPayload, consultationPoller, sessionId],
   );
 
   const live = useLiveStylist(sessionId, runLiveTool);
@@ -266,12 +272,12 @@ export function DresslyApp() {
       try {
         const result = await api.retryJob(jobId);
         setBlocked(result.blocked);
-        if (result.job) await pollJob(result.job);
+        if (result.job) await consultationPoller.start(result.job);
       } catch (retryError) {
         setError(retryError instanceof Error ? retryError.message : "Retry failed.");
       }
     },
-    [pollJob],
+    [consultationPoller],
   );
 
   const withSession = useCallback(
@@ -293,12 +299,13 @@ export function DresslyApp() {
       const result = await api.animate(session.id, session.activeLookId ?? undefined);
       setAnimationBlocked(result.blocked);
       if (!result.job) return;
-      const token = ++pollToken.current;
+      const token = ++animationPollToken.current;
       setAnimationJob(result.job);
       for (let index = 0; index < MAX_POLLS; index += 1) {
         await delay(2500);
-        if (pollToken.current !== token) return;
+        if (animationPollToken.current !== token) return;
         const polled = await api.pollJob(result.job.id);
+        if (animationPollToken.current !== token) return;
         setAnimationJob(polled.job);
         if (polled.session) setSession(polled.session);
         if (polled.job.status === "failed") {
@@ -322,6 +329,8 @@ export function DresslyApp() {
 
   const newLook = useCallback(() => {
     pollToken.current += 1;
+    animationPollToken.current += 1;
+    currentVersionRef.current = null;
     consultationPoller.clear();
     setSession(null);
     setSuggestions([]);
@@ -343,6 +352,10 @@ export function DresslyApp() {
     sessionId: session?.id,
     enabled: Boolean(session?.consultation && session.consultation.status !== "ENDED"),
     onSessionUpdate: (updatedSession) => {
+      const previous = currentVersionRef.current;
+      const next = updatedSession.consultation?.currentDesignVersionId ?? null;
+      currentVersionRef.current = next;
+      setSelectedVersionId((selected) => selectionAfterConsultationSnapshot(previous, next, selected));
       setSession(updatedSession);
     },
     onEvent: (event) => {

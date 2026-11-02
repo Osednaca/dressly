@@ -1,5 +1,6 @@
 import { env } from "@/lib/env";
 import type { MeetingBotStatus } from "@/lib/types";
+import { meetingBotRemoteConfigurationError, meetingBotSecretIsSafe } from "@/services/meeting-bot/security";
 import {
   DEFAULT_BOT_DISPLAY_NAME,
   MEETING_BOT_SECRET_HEADER,
@@ -13,14 +14,12 @@ import {
  * Next.js Server-to-Worker HTTP Client (`services/meeting-bot/client.ts`).
  *
  * Communicates with the isolated Playwright Meeting Bot Worker on `env.meetingBotUrl`.
- * When the standalone worker is not running (`ECONNREFUSED` / timeout), gracefully
- * falls back to `{ workerConnected: false, status: "LISTENING" }` so manual and
- * simulated consultation sessions continue working without requiring the separate
- * worker process.
+ * When the standalone worker is unavailable, report failure rather than implying
+ * that audio is being captured. Manual consultation can still continue.
  */
 
 const WORKER_OFFLINE_MESSAGE =
-  "Bot worker not running — manual/simulated consultation mode active.";
+  "Bot worker unavailable — audio is not being captured; manual consultation remains available.";
 
 function normalizeBaseUrl(baseUrl?: string): string {
   return (baseUrl ?? env.meetingBotUrl).replace(/\/+$/, "");
@@ -36,6 +35,7 @@ function workerHeaders(): Record<string, string> {
 export const meetingBotClient = {
   async getHealth(baseUrl?: string): Promise<BotHealthResponse | null> {
     try {
+      if (!meetingBotSecretIsSafe(env.meetingBotSecret) || meetingBotRemoteConfigurationError(normalizeBaseUrl(baseUrl))) return null;
       const res = await fetch(`${normalizeBaseUrl(baseUrl)}/bot/health`, {
         method: "GET",
         headers: workerHeaders(),
@@ -57,6 +57,10 @@ export const meetingBotClient = {
     message: string;
     snapshot?: BotSessionSnapshot;
   }> {
+    const configError = !meetingBotSecretIsSafe(env.meetingBotSecret)
+      ? "Configure a strong MEETING_BOT_SECRET (at least 32 characters) on both app and worker."
+      : meetingBotRemoteConfigurationError(normalizeBaseUrl(baseUrl), req.callbackUrl);
+    if (configError) return { workerConnected: false, status: "FAILED", message: configError };
     try {
       const res = await fetch(`${normalizeBaseUrl(baseUrl)}/bot/sessions`, {
         method: "POST",
@@ -71,7 +75,7 @@ export const meetingBotClient = {
       if (!res.ok) {
         return {
           workerConnected: false,
-          status: "LISTENING",
+          status: "FAILED",
           message: WORKER_OFFLINE_MESSAGE,
         };
       }
@@ -89,7 +93,7 @@ export const meetingBotClient = {
     } catch {
       return {
         workerConnected: false,
-        status: "LISTENING",
+        status: "FAILED",
         message: WORKER_OFFLINE_MESSAGE,
       };
     }
@@ -100,6 +104,7 @@ export const meetingBotClient = {
     baseUrl?: string,
   ): Promise<BotSessionSnapshot | null> {
     try {
+      if (!meetingBotSecretIsSafe(env.meetingBotSecret) || meetingBotRemoteConfigurationError(normalizeBaseUrl(baseUrl))) return null;
       const encodedId = encodeURIComponent(consultationSessionId);
       const res = await fetch(`${normalizeBaseUrl(baseUrl)}/bot/sessions/${encodedId}`, {
         method: "GET",
@@ -115,6 +120,7 @@ export const meetingBotClient = {
 
   async stopSession(consultationSessionId: string, baseUrl?: string): Promise<boolean> {
     try {
+      if (!meetingBotSecretIsSafe(env.meetingBotSecret) || meetingBotRemoteConfigurationError(normalizeBaseUrl(baseUrl))) return false;
       const encodedId = encodeURIComponent(consultationSessionId);
       const res = await fetch(
         `${normalizeBaseUrl(baseUrl)}/bot/sessions/${encodedId}/stop`,
@@ -138,6 +144,10 @@ export const meetingBotClient = {
     status: MeetingBotStatus;
     message: string;
   }> {
+    const configError = !meetingBotSecretIsSafe(env.meetingBotSecret)
+      ? "Configure a strong MEETING_BOT_SECRET (at least 32 characters) on both app and worker."
+      : meetingBotRemoteConfigurationError(normalizeBaseUrl(baseUrl));
+    if (configError) return { workerConnected: false, status: "FAILED", message: configError };
     try {
       const encodedId = encodeURIComponent(consultationSessionId);
       const res = await fetch(
@@ -152,7 +162,7 @@ export const meetingBotClient = {
       if (!res.ok) {
         return {
           workerConnected: false,
-          status: "LISTENING",
+          status: "FAILED",
           message: WORKER_OFFLINE_MESSAGE,
         };
       }
@@ -166,7 +176,7 @@ export const meetingBotClient = {
     } catch {
       return {
         workerConnected: false,
-        status: "LISTENING",
+        status: "FAILED",
         message: WORKER_OFFLINE_MESSAGE,
       };
     }
@@ -177,6 +187,7 @@ export const meetingBotClient = {
     baseUrl?: string,
   ): Promise<AudioDiagnosticResult | null> {
     try {
+      if (!meetingBotSecretIsSafe(env.meetingBotSecret) || meetingBotRemoteConfigurationError(normalizeBaseUrl(baseUrl))) return null;
       const res = await fetch(`${normalizeBaseUrl(baseUrl)}/bot/diagnostics/audio`, {
         method: "POST",
         headers: workerHeaders(),

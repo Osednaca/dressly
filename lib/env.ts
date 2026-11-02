@@ -148,7 +148,7 @@ export const env = {
     /\/+$/,
     "",
   ),
-  meetingBotSecret: read("MEETING_BOT_SECRET") ?? "dressly-local-bot-secret",
+  meetingBotSecret: read("MEETING_BOT_SECRET") ?? ((process.env.NODE_ENV === "production" || process.env.VERCEL) ? "" : "dressly-local-bot-secret"),
   meetingBotProfileDir: read("MEETING_BOT_PROFILE_DIR") ?? "data/bot-profile",
   meetingBotHeadless: bool("MEETING_BOT_HEADLESS", false),
   meetingAudioBackend: (read("MEETING_AUDIO_BACKEND") ?? "auto") as

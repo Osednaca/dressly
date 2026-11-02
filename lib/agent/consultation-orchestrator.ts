@@ -173,9 +173,7 @@ export async function startSessionConsultation(
     botDisplayName: DEFAULT_BOT_DISPLAY_NAME,
   });
 
-  const activityText = botOutcome.workerConnected
-    ? botOutcome.message
-    : "Dressly AI Assistant listening to consultation";
+  const activityText = botOutcome.message;
 
   const updated = await mutateSession(sessionId, (session) =>
     setConsultationBotStatus(session, botOutcome.status, {
@@ -186,7 +184,7 @@ export async function startSessionConsultation(
 
   if (!updated || !updated.consultation) return null;
 
-  publishConsultationEvent(sessionId, {
+  await publishConsultationEvent(sessionId, {
     type: "bot.status",
     status: updated.consultation.botStatus,
     consultationStatus: updated.consultation.status,
@@ -214,7 +212,7 @@ export async function patchSessionConsultation(
   );
   if (!updated) return null;
 
-  publishConsultationEvent(sessionId, {
+  await publishConsultationEvent(sessionId, {
     type: "consultation.updated",
     session: updated,
   });
@@ -234,7 +232,7 @@ export async function endSessionConsultation(
     versionsCreated: updated.consultation?.versions.length ?? 0,
   });
 
-  publishConsultationEvent(sessionId, {
+  await publishConsultationEvent(sessionId, {
     type: "consultation.ended",
     session: updated,
   });
@@ -275,7 +273,7 @@ export async function reconnectSessionConsultation(
   });
   if (!updated || !updated.consultation) return null;
 
-  publishConsultationEvent(sessionId, {
+  await publishConsultationEvent(sessionId, {
     type: "bot.status",
     status: updated.consultation.botStatus,
     consultationStatus: updated.consultation.status,
@@ -335,7 +333,7 @@ async function processFinalUtteranceImmediate(
   if (!afterTranscriptSession || !afterTranscriptSession.consultation) return null;
 
   if (appendedSegment) {
-    publishConsultationEvent(sessionId, {
+    await publishConsultationEvent(sessionId, {
       type: "transcript.final",
       segment: appendedSegment,
       session: afterTranscriptSession,
@@ -363,6 +361,11 @@ async function processFinalUtteranceImmediate(
   let duplicateProposal = false;
 
   const afterDecisionSession = await mutateSession(sessionId, (session) => {
+    // A shared-storage CAS conflict can retry this callback with a newer state.
+    // Discard outputs from the losing attempt before computing them again.
+    createdDecision = null;
+    createdSuggestion = null;
+    duplicateProposal = false;
     if (!session.consultation) return session;
     let next = session;
 
@@ -499,7 +502,7 @@ async function processFinalUtteranceImmediate(
       jevAction: detected.jevAction,
       fields: detected.changes.map((c) => c.field),
     });
-    publishConsultationEvent(sessionId, {
+    await publishConsultationEvent(sessionId, {
       type: "suggestion.created",
       suggestion: detected,
       decision: createdDecision,
@@ -536,7 +539,7 @@ async function processFinalUtteranceImmediate(
       blocked: tryOnRes.blocked,
     };
   } else if (action !== "IGNORE") {
-    publishConsultationEvent(sessionId, {
+    await publishConsultationEvent(sessionId, {
       type: "consultation.updated",
       session: afterDecisionSession,
     });
@@ -575,7 +578,7 @@ export async function ingestConsultationTranscript(
     });
     if (!updated) return null;
     if (partialSeg) {
-      publishConsultationEvent(sessionId, {
+      await publishConsultationEvent(sessionId, {
         type: "transcript.partial",
         segment: partialSeg,
         session: updated,
@@ -630,6 +633,7 @@ export async function handleSuggestionAction(
   let previousState: BagDesignState | null = null;
 
   const afterActionSession = await mutateSession(sessionId, (session) => {
+    previousState = null;
     if (session.consultation) {
       previousState = structuredClone(session.consultation.designState);
     }
@@ -660,7 +664,7 @@ export async function handleSuggestionAction(
 
   const resolvedSuggestion: ProposedDesignChange = actedSuggestion;
 
-  publishConsultationEvent(sessionId, {
+  await publishConsultationEvent(sessionId, {
     type: "suggestion.updated",
     suggestion: resolvedSuggestion,
     session: afterActionSession,
@@ -734,7 +738,7 @@ export async function restoreSessionDesignVersion(
   );
   if (!updated) return null;
 
-  publishConsultationEvent(sessionId, {
+  await publishConsultationEvent(sessionId, {
     type: "consultation.updated",
     session: updated,
   });

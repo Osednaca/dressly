@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { enqueueConsultationUtterance } from "@/lib/agent/consultation-aggregator";
 import { ingestConsultationTranscript } from "@/lib/agent/consultation-orchestrator";
 import { env } from "@/lib/env";
+import { meetingBotSecretIsSafe } from "@/services/meeting-bot/security";
 import { publishConsultationEvent } from "@/lib/server/consultation-events";
 import { logConsultationMilestone } from "@/lib/server/consultation-logger";
 import { setConsultationBotStatus } from "@/lib/session/reducer";
@@ -22,7 +23,7 @@ function jsonResponse(data: unknown, status = 200): Response {
 export async function POST(request: Request, context: Context) {
   try {
     const providedSecret = request.headers.get(MEETING_BOT_SECRET_HEADER);
-    if (!providedSecret || providedSecret !== env.meetingBotSecret) {
+    if (!meetingBotSecretIsSafe(env.meetingBotSecret) || !providedSecret || providedSecret !== env.meetingBotSecret) {
       return jsonResponse({ error: "Unauthorized meeting bot webhook" }, 401);
     }
 
@@ -77,7 +78,7 @@ export async function POST(request: Request, context: Context) {
             });
           }
         }
-        publishConsultationEvent(id, {
+        await publishConsultationEvent(id, {
           type: "bot.status",
           status: updated.consultation.botStatus,
           consultationStatus: updated.consultation.status,
@@ -132,7 +133,7 @@ export async function POST(request: Request, context: Context) {
         if (!updated || !updated.consultation) {
           return jsonResponse({ error: "Consultation session not found" }, 404);
         }
-        publishConsultationEvent(id, {
+        await publishConsultationEvent(id, {
           type: "bot.status",
           status: updated.consultation.botStatus,
           consultationStatus: updated.consultation.status,
