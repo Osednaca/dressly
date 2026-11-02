@@ -7,7 +7,7 @@ import { meetingBotSecretIsSafe } from "@/services/meeting-bot/security";
 import { publishConsultationEvent } from "@/lib/server/consultation-events";
 import { logConsultationMilestone } from "@/lib/server/consultation-logger";
 import { setConsultationBotStatus } from "@/lib/session/reducer";
-import { mutateSession } from "@/lib/session/store";
+import { getSession, mutateSession } from "@/lib/session/store";
 import { nowIso } from "@/lib/util/id";
 import {
   MEETING_BOT_SECRET_HEADER,
@@ -33,10 +33,16 @@ export async function POST(request: Request, context: Context) {
       return jsonResponse({ error: "Invalid bot webhook payload" }, 400);
     }
 
+    const current = await getSession(id);
+    if (!current?.consultation) return jsonResponse({ error: "Consultation session not found" }, 404);
+    if (current.consultation.botAttemptId && event.attemptId !== current.consultation.botAttemptId) {
+      return jsonResponse({ ok: true, ignored: true });
+    }
+
     switch (event.type) {
       case "bot.status": {
         const updated = await mutateSession(id, (session) =>
-          setConsultationBotStatus(session, event.status, {
+          session.consultation?.botAttemptId && session.consultation.botAttemptId !== event.attemptId ? session : setConsultationBotStatus(session, event.status, {
             error: event.error,
             activityText: event.detail,
           }),
@@ -44,6 +50,7 @@ export async function POST(request: Request, context: Context) {
         if (!updated || !updated.consultation) {
           return jsonResponse({ error: "Consultation session not found" }, 404);
         }
+        if (updated.consultation.botAttemptId && updated.consultation.botAttemptId !== event.attemptId) return jsonResponse({ ok: true, ignored: true });
         if (
           event.status === "OPENING_MEET" ||
           event.status === "WAITING_FOR_ADMISSION"
@@ -98,8 +105,8 @@ export async function POST(request: Request, context: Context) {
           text: event.text,
           isFinal: false,
           timestamp: event.timestamp,
-        });
-        if (!turn) return jsonResponse({ error: "Consultation session not found" }, 404);
+        }, event.attemptId);
+        if (!turn) return jsonResponse({ ok: true, ignored: true });
         return jsonResponse({ ok: true, session: turn.session });
       }
 
@@ -109,23 +116,22 @@ export async function POST(request: Request, context: Context) {
         }
         console.log(`[NEXT:BOT-EVENT:${id}] transcript.final: "${event.text.trim()}"`);
         await enqueueConsultationUtterance(id, event.text, async (mergedText) => {
+          const latest = await getSession(id);
+          if (latest?.consultation?.botAttemptId && latest.consultation.botAttemptId !== event.attemptId) return;
           await ingestConsultationTranscript(id, {
             text: mergedText,
             isFinal: true,
             immediate: true,
             timestamp: event.timestamp,
-          });
+          }, event.attemptId);
         });
         return jsonResponse({ ok: true, queued: true });
       }
 
       case "bot.error": {
-        console.error(
-          `[NEXT:BOT-EVENT:${id}] bot.error (recoverable=${event.recoverable}): ${event.message}`,
-        );
         const targetStatus = event.recoverable ? "RECONNECTING" : "FAILED";
         const updated = await mutateSession(id, (session) =>
-          setConsultationBotStatus(session, targetStatus, {
+          session.consultation?.botAttemptId && session.consultation.botAttemptId !== event.attemptId ? session : setConsultationBotStatus(session, targetStatus, {
             error: event.message,
             activityText: event.message,
           }),
@@ -133,6 +139,8 @@ export async function POST(request: Request, context: Context) {
         if (!updated || !updated.consultation) {
           return jsonResponse({ error: "Consultation session not found" }, 404);
         }
+        if (updated.consultation.botAttemptId && updated.consultation.botAttemptId !== event.attemptId) return jsonResponse({ ok: true, ignored: true });
+        console.error(`[NEXT:BOT-EVENT:${id}] bot.error (recoverable=${event.recoverable})`);
         await publishConsultationEvent(id, {
           type: "bot.status",
           status: updated.consultation.botStatus,

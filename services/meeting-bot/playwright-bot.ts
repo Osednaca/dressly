@@ -282,6 +282,7 @@ export class PlaywrightMeetBotSession {
   readonly callbackUrl: string;
   readonly requestedAudioBackend: AudioBackendMode;
   readonly requestedHeadless?: boolean;
+  private attemptId?: string;
 
   private status: MeetingBotStatus = "STARTING";
   private effectiveAudioBackend: string;
@@ -311,6 +312,7 @@ export class PlaywrightMeetBotSession {
 
   constructor(req: StartBotSessionRequest) {
     this.consultationSessionId = req.consultationSessionId;
+    this.attemptId = req.attemptId;
     this.meetingUrl = req.meetingUrl.trim();
     this.botDisplayName = req.botDisplayName?.trim() || DEFAULT_BOT_DISPLAY_NAME;
     this.callbackUrl = req.callbackUrl.trim();
@@ -333,6 +335,15 @@ export class PlaywrightMeetBotSession {
       return true;
     }
     return false;
+  }
+
+  setAttemptId(attemptId?: string): void {
+    this.attemptId = attemptId;
+  }
+
+  async failStartup(): Promise<void> {
+    if (this.stopped) return;
+    await this.handleUnexpectedDisconnect("Meeting bot startup failed.");
   }
 
   getSnapshot(): BotSessionSnapshot {
@@ -1104,17 +1115,19 @@ export class PlaywrightMeetBotSession {
   private async postWebhook(event: BotWebhookEvent): Promise<void> {
     if (!this.callbackUrl) return;
     try {
-      await fetch(this.callbackUrl, {
+      const response = await fetch(this.callbackUrl, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           [MEETING_BOT_SECRET_HEADER]: env.meetingBotSecret,
         },
-        body: JSON.stringify(event),
+        body: JSON.stringify({ ...event, attemptId: this.attemptId }),
         signal: AbortSignal.timeout(4000),
       });
-    } catch {
-      // Non-fatal if Next.js callback endpoint is unreachable in standalone tests
+      if (!response.ok) console.warn(`[meeting-bot-worker] Callback rejected: HTTP ${response.status}`);
+    } catch (error) {
+      const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      console.warn(`[meeting-bot-worker] Callback failed: ${timedOut ? "timeout" : "connection error"}`);
     }
   }
 }

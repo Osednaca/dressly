@@ -19,7 +19,20 @@ import {
  */
 
 const WORKER_OFFLINE_MESSAGE =
-  "Bot worker unavailable — audio is not being captured; manual consultation remains available.";
+  "Cannot reach the bot worker. Check the worker process and HTTPS tunnel; audio is not being captured.";
+
+function workerHttpFailure(status: number): string {
+  if (status === 401 || status === 403) return "Bot worker authentication failed. Check the shared secret on the app and worker.";
+  if (status === 404) return "Bot worker endpoint was not found. Check the worker URL and tunnel configuration.";
+  return `Bot worker returned HTTP ${status}. Check the worker and tunnel logs.`;
+}
+
+function workerNetworkFailure(error: unknown): string {
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    return "Bot worker request timed out. Check the worker process and HTTPS tunnel.";
+  }
+  return WORKER_OFFLINE_MESSAGE;
+}
 
 function normalizeBaseUrl(baseUrl?: string): string {
   return (baseUrl ?? env.meetingBotUrl).replace(/\/+$/, "");
@@ -73,10 +86,11 @@ export const meetingBotClient = {
       });
 
       if (!res.ok) {
+        console.warn(`[meeting-bot-client] Start rejected: HTTP ${res.status}`);
         return {
           workerConnected: false,
           status: "FAILED",
-          message: WORKER_OFFLINE_MESSAGE,
+          message: workerHttpFailure(res.status),
         };
       }
 
@@ -86,15 +100,16 @@ export const meetingBotClient = {
         status: snapshot.status,
         message:
           snapshot.status === "FAILED"
-            ? (snapshot.lastError ?? `${snapshot.botDisplayName} failed to join meeting.`)
+            ? "Bot worker reported a startup failure. Check the worker logs."
             : `${snapshot.botDisplayName} (${snapshot.status})`,
-        snapshot,
+        snapshot: { ...snapshot, lastError: snapshot.lastError ? "Worker reported an error; check its logs." : snapshot.lastError },
       };
-    } catch {
+    } catch (error) {
+      console.warn(`[meeting-bot-client] Start failed: ${error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError") ? "timeout" : "connection error"}`);
       return {
         workerConnected: false,
         status: "FAILED",
-        message: WORKER_OFFLINE_MESSAGE,
+        message: workerNetworkFailure(error),
       };
     }
   },
@@ -139,6 +154,7 @@ export const meetingBotClient = {
   async reconnectSession(
     consultationSessionId: string,
     baseUrl?: string,
+    attemptId?: string,
   ): Promise<{
     workerConnected: boolean;
     status: MeetingBotStatus;
@@ -155,15 +171,17 @@ export const meetingBotClient = {
         {
           method: "POST",
           headers: workerHeaders(),
+          body: JSON.stringify({ attemptId }),
           signal: AbortSignal.timeout(8000),
         },
       );
 
       if (!res.ok) {
+        console.warn(`[meeting-bot-client] Reconnect rejected: HTTP ${res.status}`);
         return {
           workerConnected: false,
           status: "FAILED",
-          message: WORKER_OFFLINE_MESSAGE,
+          message: workerHttpFailure(res.status),
         };
       }
 
@@ -171,13 +189,14 @@ export const meetingBotClient = {
       return {
         workerConnected: true,
         status: snapshot.status,
-        message: `${snapshot.botDisplayName} reconnected (${snapshot.status})`,
+        message: `${snapshot.botDisplayName} ${snapshot.status === "RECONNECTING" ? "reconnecting" : "reconnected"} (${snapshot.status})`,
       };
-    } catch {
+    } catch (error) {
+      console.warn(`[meeting-bot-client] Reconnect failed: ${error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError") ? "timeout" : "connection error"}`);
       return {
         workerConnected: false,
         status: "FAILED",
-        message: WORKER_OFFLINE_MESSAGE,
+        message: workerNetworkFailure(error),
       };
     }
   },

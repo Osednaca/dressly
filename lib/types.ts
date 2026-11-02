@@ -386,6 +386,8 @@ export interface LiveConsultationSession {
   consentConfirmed: boolean;
   status: ConsultationStatus;
   botStatus: MeetingBotStatus;
+  /** Identifies the active worker launch; callbacks from older launches are ignored. */
+  botAttemptId?: string;
   botError?: string | null;
   designState: BagDesignState;
   originalVersionId: string;

@@ -314,6 +314,7 @@ test("bot-event webhook route validates secret and updates consultation bot stat
     meetingUrl: "demo://meet-room",
     consentConfirmed: true,
   });
+  const attemptId = (await getSession(created.id))?.consultation?.botAttemptId;
 
   // 1. Unauthorized webhook request returns 401
   const unauthReq = new Request(
@@ -324,6 +325,7 @@ test("bot-event webhook route validates secret and updates consultation bot stat
       body: JSON.stringify({
         type: "bot.status",
         consultationSessionId: created.id,
+        attemptId,
         status: "WAITING_FOR_ADMISSION",
         timestamp: new Date().toISOString(),
       }),
@@ -348,6 +350,7 @@ test("bot-event webhook route validates secret and updates consultation bot stat
         consultationSessionId: created.id,
         status: "WAITING_FOR_ADMISSION",
         detail: "Waiting in lobby",
+        attemptId,
         timestamp: new Date().toISOString(),
       }),
     },

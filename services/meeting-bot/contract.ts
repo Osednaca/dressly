@@ -12,6 +12,7 @@ export const MEETING_BOT_SECRET_HEADER = "x-meeting-bot-secret";
 
 export interface StartBotSessionRequest {
   consultationSessionId: string;
+  attemptId?: string;
   meetingUrl: string;
   botDisplayName?: string; // defaults to "Dressly AI Assistant"
   callbackUrl: string;     // e.g. http://127.0.0.1:3000/api/sessions/{id}/consultation/bot-event
@@ -35,7 +36,7 @@ export interface BotSessionSnapshot {
 }
 
 export type BotWebhookEvent =
-  | {
+  (| {
       type: "bot.status";
       consultationSessionId: string;
       status: MeetingBotStatus;
@@ -61,7 +62,7 @@ export type BotWebhookEvent =
       message: string;
       recoverable: boolean;
       timestamp: string;
-    };
+    }) & { attemptId?: string };
 
 export interface BotHealthResponse {
   ok: boolean;

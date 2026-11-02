@@ -13,7 +13,7 @@ import { nowIso } from "@/lib/util/id";
 
 export const CONSULTATION_MILESTONES = [
   "consultation started",
-  "bot launched",
+  "bot launch attempted",
   "meet loaded",
   "bot admitted",
   "audio capture started",

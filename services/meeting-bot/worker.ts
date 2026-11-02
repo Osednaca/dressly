@@ -59,9 +59,22 @@ export interface BotWorkerServerHandle {
   stopAll(): Promise<void>;
 }
 
-export function createBotWorkerServer(): BotWorkerServerHandle {
-  const sessions = new Map<string, PlaywrightMeetBotSession>();
+type BotSession = Pick<PlaywrightMeetBotSession, "start" | "stop" | "reconnect" | "getSnapshot" | "isSimulatedMode" | "setAttemptId" | "failStartup">;
+
+export function createBotWorkerServer(options: { createSession?: (req: StartBotSessionRequest) => BotSession } = {}): BotWorkerServerHandle {
+  const sessions = new Map<string, BotSession>();
+  const operations = new Map<BotSession, Promise<void>>();
   let listening = false;
+
+  function runInBackground(id: string, session: BotSession, work: () => Promise<unknown>): void {
+    const operation = Promise.resolve().then(work).then(() => {}, async () => {
+      if (sessions.get(id) !== session) return;
+      console.error("[meeting-bot-worker] Background bot startup failed");
+      await session.failStartup().catch(() => {});
+    });
+    operations.set(session, operation);
+    void operation.finally(() => { if (operations.get(session) === operation) operations.delete(session); });
+  }
 
   const handleRequest = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     const method = (req.method ?? "GET").toUpperCase();
@@ -148,24 +161,33 @@ export function createBotWorkerServer(): BotWorkerServerHandle {
       }
 
       const id = body.consultationSessionId.trim();
-      // Always stop all prior bot sessions so at most ONE Chrome instance ever runs at a time
-      for (const [prevId, prevSession] of Array.from(sessions.entries())) {
-        sessions.delete(prevId);
-        await prevSession.stop().catch(() => {});
-      }
-
-      const botSession = new PlaywrightMeetBotSession({
+      const previous = [...sessions.values()];
+      sessions.clear();
+      const request: StartBotSessionRequest = {
         consultationSessionId: id,
+        attemptId: body.attemptId,
         meetingUrl: body.meetingUrl.trim(),
         botDisplayName: body.botDisplayName,
         callbackUrl: body.callbackUrl ?? "",
         audioBackend: body.audioBackend,
         headless: body.headless,
-      });
+      };
+      const botSession = options.createSession?.(request) ?? new PlaywrightMeetBotSession(request);
       sessions.set(id, botSession);
-
-      const snapshot = await botSession.start();
-      sendJson(res, 200, snapshot);
+      const start = async () => {
+        await Promise.all(previous.map(async (old) => {
+          await old.stop().catch(() => {});
+          await operations.get(old)?.catch(() => {});
+        }));
+        if (sessions.get(id) === botSession) await botSession.start();
+      };
+      if (botSession.isSimulatedMode() && previous.length === 0) {
+        await start();
+        sendJson(res, 200, botSession.getSnapshot());
+      } else {
+        sendJson(res, 202, botSession.getSnapshot());
+        runInBackground(id, botSession, start);
+      }
       return;
     }
 
@@ -190,8 +212,21 @@ export function createBotWorkerServer(): BotWorkerServerHandle {
           sendJson(res, 404, { error: "Bot session not found" });
           return;
         }
-        const snapshot = await botSession.reconnect();
-        sendJson(res, 200, snapshot);
+        const body = (await readJsonBody<{ attemptId?: string }>(req).catch(() => null)) ?? {};
+        const previous = operations.get(botSession);
+        const reconnect = async () => {
+          await previous?.catch(() => {});
+          if (sessions.get(id) !== botSession) return;
+          botSession.setAttemptId(body.attemptId);
+          await botSession.reconnect();
+        };
+        if (botSession.isSimulatedMode() && !previous) {
+          await reconnect();
+          sendJson(res, 200, botSession.getSnapshot());
+        } else {
+          sendJson(res, 202, { ...botSession.getSnapshot(), status: "RECONNECTING" });
+          runInBackground(id, botSession, reconnect);
+        }
         return;
       }
 
@@ -199,6 +234,7 @@ export function createBotWorkerServer(): BotWorkerServerHandle {
         if (botSession) {
           sessions.delete(id);
           await botSession.stop().catch(() => {});
+          await operations.get(botSession)?.catch(() => {});
         }
         sendJson(res, 200, { status: "STOPPED" });
         return;
@@ -240,7 +276,10 @@ export function createBotWorkerServer(): BotWorkerServerHandle {
     const active = Array.from(sessions.values());
     sessions.clear();
 
-    await Promise.allSettled(active.map((session) => session.stop()));
+    await Promise.allSettled(active.map(async (session) => {
+      await session.stop();
+      await operations.get(session)?.catch(() => {});
+    }));
 
     if (listening) {
       listening = false;

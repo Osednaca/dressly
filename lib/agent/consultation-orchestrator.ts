@@ -138,8 +138,9 @@ export async function startSessionConsultation(
     await ensureDemoCustomerPhoto(sessionId);
   }
 
-  const initialized = await mutateSession(sessionId, (session) =>
-    initConsultation(session, {
+  const attemptId = newId("bot");
+  const initialized = await mutateSession(sessionId, (session) => {
+    const next = initConsultation(session, {
       meetingUrl: req.meetingUrl,
       consentConfirmed: req.consentConfirmed,
       initialDesignState: req.initialDesignState,
@@ -147,8 +148,9 @@ export async function startSessionConsultation(
       autoApply: req.autoApply ?? false,
       autoApplyThreshold: env.consultationAutoApplyThreshold,
       autoTryOn: req.autoTryOn ?? false,
-    }),
-  );
+    });
+    return next.consultation ? { ...next, consultation: { ...next.consultation, botAttemptId: attemptId } } : next;
+  });
 
   if (!initialized || !initialized.consultation) return null;
 
@@ -161,12 +163,13 @@ export async function startSessionConsultation(
 
   const botOutcome = await meetingBotClient.startSession({
     consultationSessionId: sessionId,
+    attemptId,
     meetingUrl: req.meetingUrl,
     botDisplayName: DEFAULT_BOT_DISPLAY_NAME,
     callbackUrl: buildBotCallbackUrl(sessionId),
   });
 
-  logConsultationMilestone("bot launched", {
+  logConsultationMilestone("bot launch attempted", {
     sessionId,
     workerConnected: botOutcome.workerConnected,
     botStatus: botOutcome.status,
@@ -175,20 +178,26 @@ export async function startSessionConsultation(
 
   const activityText = botOutcome.message;
 
-  const updated = await mutateSession(sessionId, (session) =>
-    setConsultationBotStatus(session, botOutcome.status, {
+  const updated = await mutateSession(sessionId, (session) => {
+    if (session.consultation?.botAttemptId !== attemptId || session.consultation.botStatus !== "STARTING") return session;
+    return setConsultationBotStatus(session, botOutcome.status, {
       error: botOutcome.status === "FAILED" ? botOutcome.message : null,
       activityText,
-    }),
-  );
+    });
+  });
 
   if (!updated || !updated.consultation) return null;
+  const reportedMessage = updated.consultation.botStatus === botOutcome.status
+    ? botOutcome.message
+    : updated.consultation.botStatus === "FAILED"
+      ? updated.consultation.botError ?? "Bot worker reported a startup failure."
+      : `${DEFAULT_BOT_DISPLAY_NAME} (${updated.consultation.botStatus})`;
 
   await publishConsultationEvent(sessionId, {
     type: "bot.status",
     status: updated.consultation.botStatus,
     consultationStatus: updated.consultation.status,
-    message: activityText,
+    message: reportedMessage,
     timestamp: nowIso(),
     session: updated,
   });
@@ -198,7 +207,7 @@ export async function startSessionConsultation(
     bot: {
       status: updated.consultation.botStatus,
       workerConnected: botOutcome.workerConnected,
-      message: botOutcome.message,
+      message: reportedMessage,
     },
   };
 }
@@ -245,8 +254,14 @@ export async function reconnectSessionConsultation(
   const existing = await getSession(sessionId);
   if (!existing || !existing.consultation) return null;
 
-  const botOutcome = await meetingBotClient.reconnectSession(sessionId);
-  logConsultationMilestone("bot launched", {
+  const attemptId = newId("bot");
+  const awaiting = await mutateSession(sessionId, (session) => {
+    if (!session.consultation) return session;
+    return setConsultationBotStatus({ ...session, consultation: { ...session.consultation, botAttemptId: attemptId, status: "RECONNECTING", endedAt: undefined } }, "RECONNECTING");
+  });
+  if (!awaiting?.consultation) return null;
+  const botOutcome = await meetingBotClient.reconnectSession(sessionId, undefined, attemptId);
+  logConsultationMilestone("bot launch attempted", {
     sessionId,
     reconnected: true,
     workerConnected: botOutcome.workerConnected,
@@ -255,6 +270,7 @@ export async function reconnectSessionConsultation(
 
   const updated = await mutateSession(sessionId, (session) => {
     if (!session.consultation) return session;
+    if (session.consultation.botAttemptId !== attemptId || session.consultation.botStatus !== "RECONNECTING") return session;
     const base =
       session.consultation.status === "ENDED" || session.consultation.status === "FAILED"
         ? {
@@ -272,12 +288,17 @@ export async function reconnectSessionConsultation(
     });
   });
   if (!updated || !updated.consultation) return null;
+  const reportedMessage = updated.consultation.botStatus === botOutcome.status
+    ? botOutcome.message
+    : updated.consultation.botStatus === "FAILED"
+      ? updated.consultation.botError ?? "Bot worker reported a startup failure."
+      : `${DEFAULT_BOT_DISPLAY_NAME} (${updated.consultation.botStatus})`;
 
   await publishConsultationEvent(sessionId, {
     type: "bot.status",
     status: updated.consultation.botStatus,
     consultationStatus: updated.consultation.status,
-    message: botOutcome.message,
+    message: reportedMessage,
     timestamp: nowIso(),
     session: updated,
   });
@@ -288,9 +309,11 @@ export async function reconnectSessionConsultation(
 async function processFinalUtteranceImmediate(
   sessionId: string,
   req: IngestTranscriptRequest,
+  expectedAttemptId?: string,
 ): Promise<TranscriptTurnResponse | null> {
   const initialSession = await getSession(sessionId);
   if (!initialSession || !initialSession.consultation) return null;
+  if (expectedAttemptId && initialSession.consultation.botAttemptId !== expectedAttemptId) return null;
 
   const text = req.text.trim();
   if (!text) {
@@ -319,6 +342,8 @@ async function processFinalUtteranceImmediate(
 
   let appendedSegment: TranscriptSegment | null = null;
   const afterTranscriptSession = await mutateSession(sessionId, (session) => {
+    appendedSegment = null;
+    if (expectedAttemptId && session.consultation?.botAttemptId !== expectedAttemptId) return session;
     const next = appendTranscriptSegment(session, {
       id: req.id,
       text,
@@ -331,6 +356,7 @@ async function processFinalUtteranceImmediate(
   });
 
   if (!afterTranscriptSession || !afterTranscriptSession.consultation) return null;
+  if (expectedAttemptId && afterTranscriptSession.consultation.botAttemptId !== expectedAttemptId) return null;
 
   if (appendedSegment) {
     await publishConsultationEvent(sessionId, {
@@ -367,6 +393,7 @@ async function processFinalUtteranceImmediate(
     createdSuggestion = null;
     duplicateProposal = false;
     if (!session.consultation) return session;
+    if (expectedAttemptId && session.consultation.botAttemptId !== expectedAttemptId) return session;
     let next = session;
 
     const decision: DecisionRecord = {
@@ -492,6 +519,7 @@ async function processFinalUtteranceImmediate(
   });
 
   if (!afterDecisionSession || !afterDecisionSession.consultation) return null;
+  if (expectedAttemptId && afterDecisionSession.consultation.botAttemptId !== expectedAttemptId) return null;
 
   if (createdSuggestion && createdDecision) {
     const detected: ProposedDesignChange = createdSuggestion;
@@ -559,13 +587,17 @@ async function processFinalUtteranceImmediate(
 export async function ingestConsultationTranscript(
   sessionId: string,
   req: IngestTranscriptRequest,
+  expectedAttemptId?: string,
 ): Promise<TranscriptTurnResponse | null> {
   const existing = await getSession(sessionId);
   if (!existing || !existing.consultation) return null;
+  if (expectedAttemptId && existing.consultation.botAttemptId !== expectedAttemptId) return null;
 
   if (req.isFinal === false) {
     let partialSeg: TranscriptSegment | null = null;
     const updated = await mutateSession(sessionId, (session) => {
+      partialSeg = null;
+      if (expectedAttemptId && session.consultation?.botAttemptId !== expectedAttemptId) return session;
       const next = appendTranscriptSegment(session, {
         id: req.id,
         text: req.text,
@@ -577,6 +609,7 @@ export async function ingestConsultationTranscript(
       return next;
     });
     if (!updated) return null;
+    if (expectedAttemptId && updated.consultation?.botAttemptId !== expectedAttemptId) return null;
     if (partialSeg) {
       await publishConsultationEvent(sessionId, {
         type: "transcript.partial",
@@ -603,7 +636,7 @@ export async function ingestConsultationTranscript(
         text: mergedText,
         isFinal: true,
         immediate: true,
-      });
+      }, expectedAttemptId);
     });
     if (flushedResult) return flushedResult;
     const latest = await getSession(sessionId);
@@ -620,7 +653,7 @@ export async function ingestConsultationTranscript(
     };
   }
 
-  return processFinalUtteranceImmediate(sessionId, req);
+  return processFinalUtteranceImmediate(sessionId, req, expectedAttemptId);
 }
 
 export async function handleSuggestionAction(
