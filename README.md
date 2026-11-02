@@ -35,6 +35,58 @@ and the UI banner says so.
 To rehearse the demo with real providers but a preloaded brief, use `DRESSLY_DEMO_MODE=true`
 instead. That still makes real provider calls.
 
+## Deploy on Vercel with Supabase
+
+Vercel needs shared storage because function instances do not share the app's local files or
+memory. Supabase stores sessions, jobs and consultation events in Postgres, and uploaded and
+generated media in a private Storage bucket. Local development keeps using `data/` by default.
+
+1. Create a Supabase project on the Free plan. In its **SQL Editor**, run these files in order:
+   [`001_storage_sessions.sql`](supabase/migrations/001_storage_sessions.sql),
+   [`002_jobs.sql`](supabase/migrations/002_jobs.sql), and
+   [`003_consultation_events.sql`](supabase/migrations/003_consultation_events.sql).
+   The first migration creates the private `dressly-private` bucket. If you select another
+   bucket name, create that bucket as **private** and set `SUPABASE_STORAGE_BUCKET` to match.
+2. In Vercel project settings, add these environment variables to the intended **Production**
+   and/or **Preview** environment:
+
+   | Variable | Value |
+   | --- | --- |
+   | `DRESSLY_STORAGE_BACKEND` | `supabase` |
+   | `SUPABASE_URL` | The project's HTTPS URL from Supabase project settings |
+   | `SUPABASE_SECRET_KEY` | A Supabase secret key (`sb_secret_…`) or legacy `service_role` key |
+   | `SUPABASE_STORAGE_BUCKET` | `dressly-private`, or the private bucket name created above |
+
+   Set the provider keys required by your features as listed below. Store the Supabase secret
+   only in server-side environment variables: never give it a `NEXT_PUBLIC_` prefix, commit it,
+   or put it in client code. On Vercel, the app rejects local storage configuration; missing credentials
+   cause a server error instead of falling back to ephemeral files.
+3. Deploy the code containing these changes. Environment variable changes apply to new
+   deployments, so redeploy after changing them. Open the app and confirm that a session is
+   created, then upload a small photo and reload it. See [Vercel environment variables](https://vercel.com/docs/environment-variables).
+
+For local testing against Supabase, add the same values to `.env.local` and restart the dev
+server. To use the local disk implementation, set `DRESSLY_STORAGE_BACKEND=local` or omit it.
+The Free plan currently includes 1 GB of file storage and 500 MB of database storage per
+project; check [Supabase pricing](https://supabase.com/pricing) for current quotas and costs.
+
+**Limits and access:** Vercel Functions limit request and response bodies to 4.5 MB. The
+current upload and media routes proxy bytes through the function, so a larger image may fail
+even though Supabase permits larger files; use a smaller file for now. See
+[Vercel Functions limits](https://vercel.com/docs/functions/limitations). The bucket is private,
+but the application currently grants access based on opaque session/media identifiers rather
+than user authentication or per-user ownership; it is not a multi-user access-control system.
+Provider usage and a separately hosted Meet bot may have their own costs and limits.
+
+**Google Meet:** the bot is a separate long-running Chromium worker and does not run inside a
+Vercel Function. If Live Consultation is needed, host the worker separately with Chromium,
+FFmpeg, a persistent Google profile and its Gemini key. The worker listens on `127.0.0.1:4100`;
+expose it through an HTTPS reverse proxy on that host, and set Vercel's `MEETING_BOT_URL` to
+that proxy and `NEXT_PUBLIC_APP_URL` to the public HTTPS application origin. Set the same
+random `MEETING_BOT_SECRET` of at least 32 characters on both the app and worker. Vercel's
+localhost does not refer to that worker. A live bot and public deployment must be verified
+against the actual infrastructure after it is configured.
+
 ## Required keys
 
 | Provider | Role | Env var |
@@ -65,7 +117,7 @@ step.
 app/          Next.js App Router — pages and API routes (HTTP only)
 components/   Presentation — no provider knowledge
 lib/agent/    The agent loop: plan → decide → act
-lib/session/  Pure reducer + server store with disk mirror
+lib/session/  Pure reducer + server store (local disk or shared Supabase)
 lib/catalog/  Deterministic filtering and scoring
 services/     Provider adapters: youcam, jev, gemini, runway (+ mocks/fallbacks)
 ```
@@ -194,7 +246,7 @@ All meeting audio capture sits behind the `ConsultationAudioSource` interface (`
 | `CONSULTATION_AUTO_APPLY_THRESHOLD` | `0.90` | Minimum confidence (`0.5..1.0`) required when `AUTO APPLY ●` is enabled |
 | `MEETING_BOT_PORT` | `4100` | Port for the standalone Playwright meeting-bot worker |
 | `MEETING_BOT_URL` | `http://127.0.0.1:4100` | Internal worker URL called by Next.js |
-| `MEETING_BOT_SECRET` | `dressly-local-bot-secret` | Shared `X-Meeting-Bot-Secret` authenticating Next.js ↔ worker requests |
+| `MEETING_BOT_SECRET` | local dev only | Shared `X-Meeting-Bot-Secret` authenticating Next.js ↔ worker requests; public deployment requires a matching secret of at least 32 characters |
 | `MEETING_BOT_PROFILE_DIR` | `data/bot-profile` | Persistent Chromium profile directory for Google Meet |
 | `MEETING_BOT_HEADLESS` | `false` | Headed mode (`false`) by default for real Google Meet WebRTC media and 2FA/sign-in; set `true` for `--headless=new` CI/test runs |
 | `MEETING_AUDIO_BACKEND` | `auto` | `"auto"`, `"webrtc-tap"`, or `"pulseaudio"` |
