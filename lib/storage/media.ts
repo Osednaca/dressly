@@ -1,11 +1,12 @@
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { isSupabaseStorage, SupabaseRequestError } from "@/lib/storage/supabase";
 import {
   RESULT_DIR,
   UPLOAD_DIR,
   VIDEO_DIR,
   assertSafeName,
   contentTypeFromExt,
+  readDataFile,
 } from "@/lib/storage/files";
 
 /**
@@ -68,9 +69,11 @@ export async function readMediaBytes(
   try {
     // The path is validated against the `data/` tree above; excluding it from static
     // tracing stops Turbopack from bundling the whole project into the server output.
-    const bytes = await readFile(/* turbopackIgnore: true */ disk);
+    const bytes = await readDataFile(path.dirname(disk), name);
     return { bytes, contentType: contentTypeFor(name) };
-  } catch {
+  } catch (error) {
+    if (error instanceof SupabaseRequestError && error.status === 404) return null;
+    if (isSupabaseStorage()) throw error;
     return null;
   }
 }

@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
+import { isSupabaseStorage, supabaseBucket, supabaseRequest } from "@/lib/storage/supabase";
 
 /**
  * Every byte Dressly persists lives under one directory tree so the whole runtime
@@ -15,11 +16,18 @@ export const SESSION_DIR = path.join(DATA_ROOT, "sessions");
 export const VIDEO_DIR = path.join(DATA_ROOT, "videos");
 
 export async function ensureDirs(): Promise<void> {
+  if (isSupabaseStorage()) return;
   await Promise.all(
     [UPLOAD_DIR, RESULT_DIR, SESSION_DIR, VIDEO_DIR].map((dir) =>
       mkdir(dir, { recursive: true }),
     ),
   );
+}
+
+function objectPath(dir: string, name: string): string {
+  const kind = new Map([[UPLOAD_DIR, "uploads"], [RESULT_DIR, "results"], [VIDEO_DIR, "videos"]]).get(dir);
+  if (!kind) throw new Error("Unsupported Supabase media directory");
+  return `/storage/v1/object/${encodeURIComponent(supabaseBucket())}/${kind}/${encodeURIComponent(assertSafeName(name))}`;
 }
 
 /** Reject traversal before touching the filesystem. Ids are always our own tokens. */
@@ -37,6 +45,15 @@ export async function writeDataFile(
 ): Promise<string> {
   await ensureDirs();
   const safe = assertSafeName(name);
+  if (isSupabaseStorage()) {
+    const bytes = typeof contents === "string" ? Buffer.from(contents) : contents;
+    await supabaseRequest(objectPath(dir, safe), {
+      method: "POST",
+      headers: { "Content-Type": contentTypeFromExt(path.extname(safe).slice(1)), "x-upsert": "true" },
+      body: new Uint8Array(bytes),
+    });
+    return path.join(dir, safe);
+  }
   const target = path.join(dir, safe);
   await writeFile(target, contents);
   return target;
@@ -44,6 +61,11 @@ export async function writeDataFile(
 
 export async function readDataFile(dir: string, name: string): Promise<Buffer> {
   const safe = assertSafeName(name);
+  if (isSupabaseStorage()) {
+    const object = objectPath(dir, safe);
+    const response = await supabaseRequest(object.replace("/storage/v1/object/", "/storage/v1/object/authenticated/"));
+    return Buffer.from(await response.arrayBuffer());
+  }
   return readFile(path.join(dir, safe));
 }
 
@@ -51,7 +73,8 @@ export async function readJsonFile<T>(dir: string, name: string): Promise<T | nu
   try {
     const raw = await readDataFile(dir, name);
     return JSON.parse(raw.toString("utf8")) as T;
-  } catch {
+  } catch (error) {
+    if (isSupabaseStorage()) throw error;
     return null;
   }
 }
@@ -61,6 +84,13 @@ export async function writeJsonFile(dir: string, name: string, value: unknown): 
 }
 
 export async function deleteDataFile(dir: string, name: string): Promise<void> {
+  if (isSupabaseStorage()) {
+    const object = objectPath(dir, name);
+    const base = `/storage/v1/object/${encodeURIComponent(supabaseBucket())}`;
+    const prefix = object.slice(base.length + 1).split("/").map(decodeURIComponent).join("/");
+    await supabaseRequest(base, { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prefixes: [prefix] }) });
+    return;
+  }
   try {
     await unlink(path.join(dir, assertSafeName(name)));
   } catch {

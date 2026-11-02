@@ -2,6 +2,8 @@ import type { StylingSession } from "@/lib/types";
 import { SESSION_DIR, readJsonFile, writeJsonFile } from "@/lib/storage/files";
 import { newId } from "@/lib/util/id";
 import { createSessionRecord } from "@/lib/session/reducer";
+import { isSupabaseStorage, supabaseRequest } from "@/lib/storage/supabase";
+import { assertSafeName } from "@/lib/storage/files";
 
 /**
  * Server-owned session state.
@@ -22,14 +24,24 @@ function sessionFile(id: string): string {
   return `${id}.json`;
 }
 
+interface SessionRow { id: string; data: StylingSession; revision: number }
+const SESSION_TABLE = "/rest/v1/dressly_sessions";
+
+async function cloudSession(id: string): Promise<SessionRow | null> {
+  const safe = assertSafeName(id);
+  const response = await supabaseRequest(`${SESSION_TABLE}?id=eq.${encodeURIComponent(safe)}&select=id,data,revision`);
+  const rows = await response.json() as SessionRow[];
+  return rows[0] ?? null;
+}
+
 export async function createSession(userPhotoPath: string | null): Promise<StylingSession> {
   const session = createSessionRecord(newId("ses"), userPhotoPath);
-  memory.set(session.id, session);
   await persist(session);
   return session;
 }
 
 export async function getSession(id: string): Promise<StylingSession | null> {
+  if (isSupabaseStorage()) return (await cloudSession(id))?.data ?? null;
   const cached = memory.get(id);
   if (cached) return cached;
   const fromDisk = await readJsonFile<StylingSession>(SESSION_DIR, sessionFile(id));
@@ -38,6 +50,16 @@ export async function getSession(id: string): Promise<StylingSession | null> {
 }
 
 export async function persist(session: StylingSession): Promise<void> {
+  if (isSupabaseStorage()) {
+    // Persist is used for creation; subsequent writes must use mutateSession so
+    // they cannot overwrite a concurrent revision without a compare-and-swap.
+    await supabaseRequest(SESSION_TABLE, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: assertSafeName(session.id), data: session }),
+    });
+    return;
+  }
   memory.set(session.id, session);
   await writeJsonFile(SESSION_DIR, sessionFile(session.id), session);
 }
@@ -50,6 +72,24 @@ export async function mutateSession(
   id: string,
   mutator: (session: StylingSession) => StylingSession | Promise<StylingSession>,
 ): Promise<StylingSession | null> {
+  if (isSupabaseStorage()) {
+    // The callback may be retried after a concurrent write. It must not perform
+    // external side effects; each attempt computes its result from a fresh row.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const row = await cloudSession(id);
+      if (!row) return null;
+      const next = await mutator(row.data);
+      const safe = assertSafeName(id);
+      const response = await supabaseRequest(`${SESSION_TABLE}?id=eq.${encodeURIComponent(safe)}&revision=eq.${row.revision}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Prefer: "return=representation" },
+        body: JSON.stringify({ data: next, revision: row.revision + 1 }),
+      });
+      const updated = await response.json() as SessionRow[];
+      if (updated.length) return updated[0]!.data;
+    }
+    throw new Error("Session update conflict: retry limit exceeded");
+  }
   const previous = locks.get(id) ?? Promise.resolve();
   const run = previous
     .catch(() => undefined)
@@ -73,5 +113,10 @@ export async function mutateSession(
 }
 
 export async function listSessions(): Promise<string[]> {
+  if (isSupabaseStorage()) {
+    const response = await supabaseRequest(`${SESSION_TABLE}?select=id`);
+    const rows = await response.json() as Array<{ id: string }>;
+    return rows.map((row) => row.id);
+  }
   return [...memory.keys()];
 }

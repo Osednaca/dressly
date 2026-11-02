@@ -1,9 +1,9 @@
 export const dynamic = "force-dynamic";
 
-import { NextResponse } from "next/server";
 import { readDataFile } from "@/lib/storage/files";
 import { contentTypeFor, isMediaKind, mediaDir } from "@/lib/storage/media";
 import { assertSafeName } from "@/lib/storage/files";
+import { SupabaseRequestError, isSupabaseStorage } from "@/lib/storage/supabase";
 
 type Context = { params: Promise<{ segments: string[] }> };
 
@@ -16,14 +16,15 @@ type Context = { params: Promise<{ segments: string[] }> };
 export async function GET(_request: Request, context: Context) {
   try {
     const { segments } = await context.params;
-    if (segments.length !== 2) return new NextResponse("Not found", { status: 404 });
+    if (segments.length !== 2) return new Response("Not found", { status: 404 });
     const [kind, rawName] = segments;
     if (!kind || !rawName || !isMediaKind(kind)) {
-      return new NextResponse("Not found", { status: 404 });
+      return new Response("Not found", { status: 404 });
     }
-    const name = assertSafeName(rawName);
+    let name: string;
+    try { name = assertSafeName(rawName); } catch { return new Response("Not found", { status: 404 }); }
     const bytes = await readDataFile(mediaDir(kind), name);
-    return new NextResponse(new Uint8Array(bytes), {
+    return new Response(new Uint8Array(bytes), {
       status: 200,
       headers: {
         "Content-Type": contentTypeFor(name),
@@ -31,7 +32,11 @@ export async function GET(_request: Request, context: Context) {
         "Content-Length": String(bytes.length),
       },
     });
-  } catch {
-    return new NextResponse("Not found", { status: 404 });
+  } catch (error) {
+    if (isSupabaseStorage() && !(error instanceof SupabaseRequestError && error.status === 404)) {
+      console.error("[dressly] media read failed:", error);
+      return Response.json({ error: "Something went wrong on our side. Please try again." }, { status: 500 });
+    }
+    return new Response("Not found", { status: 404 });
   }
 }
