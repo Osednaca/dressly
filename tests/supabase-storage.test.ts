@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
+import fs from "node:fs";
+import { register, syncBuiltinESMExports } from "node:module";
 import { UPLOAD_DIR, ensureDirs, readDataFile, writeDataFile } from "@/lib/storage/files";
 import { readMediaBytes } from "@/lib/storage/media";
 import { createSession, getSession, mutateSession } from "@/lib/session/store";
@@ -67,6 +69,53 @@ test("Vercel must have explicit shared storage and complete server credentials",
     delete process.env.SUPABASE_SECRET_KEY;
     await assert.rejects(supabaseRequest("/rest/v1/dressly_sessions"), /requires SUPABASE_URL and SUPABASE_SECRET_KEY/);
   } finally { restore(); }
+});
+
+test("POST /api/sessions on Vercel persists remotely without filesystem writes and sanitizes failures", async () => {
+  // Next's extensionless subpath needs explicit resolution under Node's test runner.
+  const hook = 'export async function resolve(s,c,n){return n(s==="next/server"?"next/server.js":s,c)}';
+  register(`data:text/javascript,${encodeURIComponent(hook)}`, import.meta.url);
+  const { POST } = await import("@/app/api/sessions/route");
+  const restore = withCloud();
+  const originalFetch = globalThis.fetch;
+  const originalMkdir = fs.promises.mkdir;
+  let row: { id: string; data: unknown; revision: number } | undefined;
+  try {
+    process.env.VERCEL = "1";
+    fs.promises.mkdir = (async () => { throw new Error("unexpected filesystem write"); }) as typeof fs.promises.mkdir;
+    syncBuiltinESMExports();
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      assert.equal(url.origin, "https://example.invalid");
+      assert.equal(url.pathname, "/rest/v1/dressly_sessions");
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        row = { id: body.id, data: body.data, revision: 0 };
+        return new Response("[]", { status: 201 });
+      }
+      assert.equal(url.searchParams.get("id"), `eq.${row?.id}`);
+      return Response.json(row ? [row] : []);
+    };
+    const created = await POST();
+    assert.equal(created.status, 201);
+    const payload = await created.json() as { session: { id: string } };
+    assert.ok(payload.session.id.startsWith("ses_"));
+    // Import a separate copy of the module, representing a cold function instance.
+    const moduleUrl = new URL("../lib/session/store.ts?cold-instance", import.meta.url);
+    const coldStore = await import(moduleUrl.href) as typeof import("@/lib/session/store");
+    assert.equal((await coldStore.getSession(payload.session.id))?.id, payload.session.id);
+    globalThis.fetch = async () => new Response("secret backend response sb_secret_test", { status: 503 });
+    const failed = await POST();
+    assert.equal(failed.status, 500);
+    const failureText = await failed.text();
+    assert.ok(!failureText.includes("sb_secret_test"));
+    assert.ok(!failureText.includes("secret backend response"));
+  } finally {
+    fs.promises.mkdir = originalMkdir;
+    syncBuiltinESMExports();
+    globalThis.fetch = originalFetch;
+    restore();
+  }
 });
 
 test("separate server processes observe and safely update the same session", async () => {
